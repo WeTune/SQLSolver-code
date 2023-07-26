@@ -1,0 +1,128 @@
+package wtune.superopt.uexpr;
+
+import java.util.*;
+
+import static wtune.common.utils.Commons.joining;
+import static wtune.common.utils.IterableSupport.any;
+import static wtune.superopt.uexpr.UExprSupport.transformTerms;
+
+final class UAddImpl implements UAdd {
+  private final List<UTerm> factors;
+
+  UAddImpl(List<UTerm> factors) {
+    this.factors = factors;
+  }
+
+  static UAdd mk(UTerm e0, UTerm e1) {
+    final List<UTerm> factors = new ArrayList<>(e0.subTerms().size() + e1.subTerms().size());
+    addFactor(factors, e0);
+    addFactor(factors, e1);
+    return new UAddImpl(factors);
+  }
+
+  static UAdd mk(UTerm e0, UTerm e1, UTerm... others) {
+    final int sum = Arrays.stream(others).map(UTerm::subTerms).mapToInt(List::size).sum();
+    final List<UTerm> factors =
+        new ArrayList<>(e0.subTerms().size() + e1.subTerms().size() + sum + 1);
+    addFactor(factors, e0);
+    addFactor(factors, e1);
+    for (UTerm factor : others) addFactor(factors, factor);
+    return new UAddImpl(factors);
+  }
+
+  private static void addFactor(List<UTerm> factors, UTerm factor) {
+    if (factor.kind() == UKind.ADD) factors.addAll(factor.subTerms());
+    else factors.add(factor);
+  }
+
+  @Override
+  public List<UTerm> subTerms() {
+    return factors;
+  }
+
+  @Override
+  public boolean isUsing(UVar var) {
+    return any(factors, it -> it.isUsing(var));
+  }
+
+  @Override
+  public boolean isUsingProjVar(UVar var) {
+    return any(factors, it -> it.isUsingProjVar(var));
+  }
+
+  @Override
+  public UTerm replaceVar(UVar baseVar, UVar repVar, boolean freshVar) {
+    final List<UTerm> replaced = transformTerms(factors, t -> t.replaceVar(baseVar, repVar, freshVar));
+    return new UAddImpl(replaced);
+  }
+
+  @Override
+  public boolean replaceVarInplace(UVar baseVar, UVar repVar, boolean freshVar) {
+    boolean modified = false;
+    for (UTerm factor : factors) {
+      if (factor.replaceVarInplace(baseVar, repVar, freshVar)) modified = true;
+    }
+    return modified;
+  }
+
+
+  @Override
+  public boolean replaceVarInplaceWOPredicate(UVar baseVar, UVar repVar) {
+    boolean modified = false;
+    for (UTerm factor : factors) {
+      if (factor.replaceVarInplaceWOPredicate(baseVar, repVar)) modified = true;
+    }
+    return modified;
+  }
+
+  @Override
+  public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    final List<UTerm> replaced = transformTerms(factors, t -> t.replaceAtomicTerm(baseTerm, repTerm));
+    return new UAddImpl(replaced);
+  }
+
+  @Override
+  public UTerm copy() {
+    List<UTerm> copies = new ArrayList<>(factors);
+    for (int i = 0, bound = factors.size(); i < bound; i++) {
+      final UTerm copiedFactor = factors.get(i).copy();
+      copies.set(i, copiedFactor);
+    }
+    return new UAddImpl(copies);
+  }
+
+  @Override
+  public String toString() {
+    if (factors.size() == 0) return "";
+    else if (factors.size() == 1) return factors.get(0).toString();
+    return joining(" + ", factors);
+  }
+
+  @Override
+  public boolean equals(Object obj) {
+    if (obj == this) return true;
+    if (!(obj instanceof UAdd)) return false;
+
+    final UAdd that = (UAdd) obj;
+    if (this.subTerms().size() != that.subTerms().size()) return false;
+    for (UTerm thisTerm : subTerms()) {
+      boolean commonTerm = false;
+      for (UTerm thatTerm : that.subTerms()) {
+        if (thisTerm.equals(thatTerm)) {
+          commonTerm = true;
+          break;
+        }
+      }
+      if (commonTerm == false) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  @Override
+  public int hashCode() {
+    return new HashSet<>(factors).hashCode();
+  }
+}
