@@ -4,31 +4,22 @@ import com.google.common.collect.BiMap;
 import com.google.common.collect.HashBiMap;
 import org.apache.commons.lang3.tuple.Pair;
 import wtune.common.utils.NameSequence;
-import wtune.common.utils.NaturalCongruence;
 import wtune.sql.ast.*;
 import wtune.sql.ast.constants.*;
 import wtune.sql.plan.*;
 import wtune.sql.schema.Column;
-import wtune.sql.schema.Constraint;
 import wtune.sql.schema.Schema;
-import wtune.sql.schema.Table;
-import wtune.superopt.liastar.Liastar;
-import wtune.superopt.logic.CASTSupport;
-import wtune.superopt.uexpr.normalizar.QueryUExprICRewriter;
-import wtune.superopt.uexpr.normalizar.QueryUExprNormalizer;
-import wtune.superopt.uexpr.normalizar.UNormalization;
+import wtune.superopt.uexpr.normalizer.QueryUExprICRewriter;
+import wtune.superopt.uexpr.normalizer.QueryUExprNormalizer;
 
 import java.util.*;
-import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import static wtune.common.datasource.DbSupport.MySQL;
 import static wtune.common.utils.Commons.coalesce;
 import static wtune.common.utils.IterableSupport.*;
 import static wtune.common.utils.ListSupport.*;
-import static wtune.common.utils.ListSupport.filter;
 import static wtune.sql.SqlSupport.parseSql;
 import static wtune.sql.ast.ExprKind.*;
 import static wtune.sql.ast.SqlNodeFields.Expr_Kind;
@@ -39,7 +30,6 @@ import static wtune.sql.ast.constants.LiteralKind.BOOL;
 import static wtune.sql.ast.constants.LiteralKind.NULL;
 import static wtune.sql.plan.PlanSupport.*;
 import static wtune.superopt.uexpr.UExprSupport.*;
-import static wtune.superopt.uexpr.UExprSupport.isNullPred;
 import static wtune.superopt.uexpr.UKind.*;
 import static wtune.superopt.uexpr.UPred.PredKind.EQ;
 import static wtune.superopt.uexpr.UPred.PredKind.GT;
@@ -52,6 +42,7 @@ public class UExprConcreteTranslator {
   private final UExprConcreteTranslationResult result;
   // Options
   private final boolean enableIntegrityConstraintRewrite;
+  private final boolean explainsPredicates;
 
   UExprConcreteTranslator(PlanContext p0, PlanContext p1, int tweak) {
     this.p0 = p0;
@@ -62,6 +53,7 @@ public class UExprConcreteTranslator {
     this.VALUESTablesReg = HashBiMap.create();
     this.result = new UExprConcreteTranslationResult(p0, p1);
     this.enableIntegrityConstraintRewrite = (tweak & UEXPR_FLAG_INTEGRITY_CONSTRAINT_REWRITE) != 0;
+    this.explainsPredicates = (tweak & UEXPR_FLAG_NO_EXPLAIN_PREDICATES) == 0;
   }
 
   UExprConcreteTranslator(String sql0, String sql1, Schema baseSchema, int tweak) {
@@ -72,13 +64,14 @@ public class UExprConcreteTranslator {
 
     this.result = new UExprConcreteTranslationResult(p0, p1);
     this.enableIntegrityConstraintRewrite = (tweak & UEXPR_FLAG_INTEGRITY_CONSTRAINT_REWRITE) != 0;
+    this.explainsPredicates = (tweak & UEXPR_FLAG_NO_EXPLAIN_PREDICATES) == 0;
   }
 
   UExprConcreteTranslationResult translate() {
     if (p0 == null || p1 == null) return null;
 
-    final QueryTranslator translator0 = new QueryTranslator(p0, false);
-    final QueryTranslator translator1 = new QueryTranslator(p1, true);
+    final QueryTranslator translator0 = new QueryTranslator(p0, false, NameSequence.mkIndexed(VAR_NAME_PREFIX, 0));
+    final QueryTranslator translator1 = new QueryTranslator(p1, true, NameSequence.mkIndexed(VAR_NAME_PREFIX, 0));
 
     if (hasDiffRootLimit(p0, p1) && !rootIsZeroLimit(p0) && !rootIsZeroLimit(p1))
       return null;
@@ -86,7 +79,10 @@ public class UExprConcreteTranslator {
     if (hasDiffRootSort(p0, p1))
       return null;
 
-    if (translator0.translate(skipSortRootNode(p0)) && translator1.translate(skipSortRootNode(p1))) {
+    Set<UVar> boundVarSet = new HashSet<>();
+
+    if (translator0.translate(skipSortRootNode(p0), boundVarSet)
+            && translator1.translate(skipSortRootNode(p1), boundVarSet)) {
       if (rootIsZeroLimit(p0)) result.srcExpr = UConst.zero();
       if (rootIsZeroLimit(p1)) result.tgtExpr = UConst.zero();
       final UVar newOutVar = UVar.mkBase(UName.mk(VAR_NAME_PREFIX));
@@ -164,12 +160,15 @@ public class UExprConcreteTranslator {
 
     public final List<UVar> visibleVars; // visible vars in current scope.
 
-    private QueryTranslator(PlanContext plan, boolean isTargetSide) {
+    public final List<UVar> icFreshVars;
+
+    private QueryTranslator(PlanContext plan, boolean isTargetSide, NameSequence tupleVarSeq) {
       this.plan = plan;
       this.isTargetSide = isTargetSide;
       this.visibleVars = new ArrayList<>(3);
+      this.icFreshVars = new ArrayList<>();
       this.auxVars = new ArrayList<>(2);
-      this.tupleVarSeq = NameSequence.mkIndexed(VAR_NAME_PREFIX, 0);
+      this.tupleVarSeq = tupleVarSeq;
     }
 
     private void debugSchema(UTerm expr) {
@@ -184,14 +183,19 @@ public class UExprConcreteTranslator {
       }
     }
 
-    private boolean translate(int startNode) {
+    private boolean translate(int startNode, Set<UVar> boundVarSet) {
+      // record the freshVars generated by normalizeWithIntegrityConstraints
+
       UTerm expr = tr(startNode);
       globalExpr = expr;
       if (expr == null) return false;
+      expr = handleMultipleOutVar(expr);
 
+      globalExpr = expr;
+      expr = UExprSupport.preprocessExpr(expr);
       expr = UExprSupport.normalizeExpr(expr);
       globalExpr = expr;
-      expr = normalizeRegroup(expr);
+      expr = normalizeRegroup(expr, boundVarSet);
       globalExpr = expr;
       if (enableIntegrityConstraintRewrite) {
         expr = normalizeWithIntegrityConstraints(expr);
@@ -199,7 +203,7 @@ public class UExprConcreteTranslator {
       else {
         expr = normalize(expr);
       }
-      expr =  commonNormalize(expr);
+      expr = commonNormalize(expr);
 
       final UVar outVar = tail(visibleVars);
       assert visibleVars.size() == 1;
@@ -214,9 +218,149 @@ public class UExprConcreteTranslator {
       return true;
     }
 
-    /**
+    /*
      * Helper functions for translation
      */
+
+    private record ValueVar(Value val, UVar var) {}
+    /**
+     * [var=concat(tuples)]
+     */
+    private UTerm generateConcatEqPred(UVar var, UVar[] tuples) {
+      int bound = tuples.length, outColumnIndex = 0;
+      List<UTerm> preds = new ArrayList<>(bound);
+      // collect & sort output column vars
+      List<ValueVar> valueTuples = new ArrayList<>();
+      for (UVar tuple : tuples) {
+        List<Value> schema = getTupleVarSchema(tuple);
+        for (Value value : schema) {
+          // [tupleColStr(tuple)]
+          valueTuples.add(new ValueVar(value, tuple));
+        }
+      }
+      valueTuples.sort(Comparator.comparing(a -> a.val.name()));
+      // generate eq conditions
+      for (ValueVar entry : valueTuples) {
+        Value value = entry.val;
+        UVar tuple = entry.var;
+        String outColStr = "%" + outColumnIndex++;
+        Column column = tryResolveColumn(isTargetSide ? p1 : p0, value);
+        String tupleColStr = column == null ? value.name() : column.toString();
+        // [outColStr(var) = tupleColStr(tuple)]
+        UVar outCol = UVar.mkProj(UName.mk(outColStr), var);
+        UVar tupleCol = UVar.mkProj(UName.mk(tupleColStr), tuple);
+        preds.add(UPred.mkBinary(EQ, outCol, tupleCol));
+      }
+      return UMul.mk(preds);
+    }
+
+    /**
+     * Handle cases where there are multiple out vars:
+     * f(x1,x2...)
+     * ->
+     * sum{x1,x2...}(f(x1,x2...) * [x=concat(x1,x2...)])
+     */
+    private UTerm handleMultipleOutVar(UTerm expr) {
+      UVar visibleVar = visibleVars.get(visibleVars.size() - 1);
+      if (visibleVar == null) return expr;
+      if (!visibleVar.is(UVar.VarKind.CONCAT) || visibleVar.args().length <= 1) return expr;
+      // the out var should be CONCAT(...)
+      UVar[] outTuples = visibleVar.args();
+      UVar outVar = mkFreshBaseVar();
+      putTupleVarSchema(outVar, getTupleVarSchema(visibleVar));
+      UTerm eqPred = generateConcatEqPred(outVar, outTuples);
+      if (eqPred == null) return expr;
+      // success
+      pop(visibleVars);
+      push(visibleVars, outVar);
+      return USum.mk(new HashSet<>(Arrays.asList(outTuples)),
+              UMul.mk(expr, eqPred));
+    }
+
+    /**
+     * Whether the projection contains output columns from the same source.
+     * "SELECT A.C1, B.C1 FROM R AS A, R AS B" is such an example,
+     * since A.C1 and B.C1 have the same source R.C1.
+     */
+    private boolean hasSameSourceColumns(List<Value> values) {
+      List<Column> columns = tryResolveColumns(isTargetSide ? p1 : p0, values, true);
+      if (columns == null) return false;
+      for (int i = 0, bound = columns.size(); i < bound; i++) {
+        for (int j = i + 1; j < bound; j++) {
+          if (columns.get(i).equals(columns.get(j))) return true;
+        }
+      }
+      return false;
+    }
+
+    /** Return the reduced schema, which eliminates unused tuples. */
+    private UVar putConcatVarSchema(UVar outVar, UVar inVar, List<Value> outSchema) {
+      assert outVar.is(UVar.VarKind.CONCAT) && inVar.is(UVar.VarKind.CONCAT);
+      // the total output schema
+      if (!isTargetSide) result.setSrcTupleVarSchema(outVar, outSchema);
+      else result.setTgtTupleVarSchema(outVar, outSchema);
+      ValuesRegistry registry = plan.valuesReg();
+      // outVar is concatenation of outTuples
+      // each outTuple has its own schema
+      Map<UVar, List<Value>> outTupleSchemas = new HashMap<>();
+      outer:
+      // for each output value, find which outTuple it should belong to
+      for (Value outValue : outSchema) {
+        // find which column(s) each output value refers to
+        Values refs = registry.valueRefsOf(registry.exprOf(outValue));
+        if (refs.size() != 1) {
+          // by default output columns are mapped to the first tuple
+          // when an output column is not a direct reference to an input column
+          //   it does not matter whatever tuple the output column belongs to
+          //   since it is devoid of attribute name duplication
+          UVar outTuple = outVar.args()[0];
+          if (!outTupleSchemas.containsKey(outTuple))
+            outTupleSchemas.put(outTuple, new ArrayList<>());
+          List<Value> outTupleSchema = outTupleSchemas.get(outTuple);
+          outTupleSchema.add(outValue);
+          continue;
+        }
+        Value ref = refs.get(0);
+        // locate which tuple the column lies in
+        int tupleIndex = 0;
+        for (UVar inTuple : inVar.args()) {
+          assert inTuple.is(UVar.VarKind.BASE);
+          if (getTupleVarSchema(inTuple).contains(ref)) {
+            UVar outTuple = outVar.args()[tupleIndex];
+            if (!outTupleSchemas.containsKey(outTuple))
+              outTupleSchemas.put(outTuple, new ArrayList<>());
+            List<Value> outTupleSchema = outTupleSchemas.get(outTuple);
+            outTupleSchema.add(outValue);
+            continue outer;
+          }
+          tupleIndex++;
+        }
+        assert false;
+      }
+      // put schemas (unused tuples are ignored)
+      for (Map.Entry<UVar, List<Value>> entry : outTupleSchemas.entrySet()) {
+        UVar outTuple = entry.getKey();
+        List<Value> schema = entry.getValue();
+        putTupleVarSchema(outTuple, schema);
+      }
+      Set<UVar> usedOutTuples = outTupleSchemas.keySet();
+      // return the original outVar if all the tuples are used
+      if (usedOutTuples.size() == outVar.args().length) return outVar;
+      // single-tuple UVar should be a BASE var
+      if (usedOutTuples.size() == 1) {
+        return usedOutTuples.toArray(new UVar[0])[0];
+      }
+      // the tuple order in outVar is preserved in the returned concat UVar
+      // unused tuples do not appear in the returned UVar
+      UVar[] usedOutTuplesArray = new UVar[usedOutTuples.size()];
+      int index = 0;
+      for (UVar outTuple : outVar.args()) {
+        if (usedOutTuples.contains(outTuple))
+          usedOutTuplesArray[index++] = outTuple;
+      }
+      return UVar.mkConcatRaw(usedOutTuplesArray);
+    }
+
     public void putTupleVarSchema(UVar var, List<Value> varSchema) {
       assert var.is(UVar.VarKind.BASE);
       if (!isTargetSide) result.setSrcTupleVarSchema(var, varSchema);
@@ -240,6 +384,21 @@ public class UExprConcreteTranslator {
 
     public UVar mkFreshBaseVar() {
       return UVar.mkBase(UName.mk(tupleVarSeq.next()));
+    }
+
+    public UVar mkFreshVarFrom(UVar var) {
+      if (var.kind() == UVar.VarKind.BASE)
+        return mkFreshBaseVar();
+      if (var.kind() == UVar.VarKind.CONCAT) {
+        // for each tuple in concat var, make a new tuple
+        int bound = var.args().length;
+        UVar[] newArgs = new UVar[bound];
+        for (int i = 0; i < bound; i++)
+          newArgs[i] = mkFreshBaseVar();
+        return UVar.mkConcatRaw(newArgs);
+      }
+      assert false;
+      return null;
     }
 
     public UVar mkFreshBaseVarUniqueName(String name) {
@@ -292,7 +451,7 @@ public class UExprConcreteTranslator {
         final ProjNode proj = (ProjNode) plan.nodeAt(nodeId);
         if(isSingleValueProj(proj.attrExprs())) {
           final UTerm predecessor = tr(plan.childOf(nodeId, 0));
-          final UTerm newSum = USum.mk(Set.of(visibleVars.remove(visibleVars.size() - 1)), predecessor);
+          final UTerm newSum = USum.mk(UVar.getBaseVars(visibleVars.remove(visibleVars.size() - 1)), predecessor);
           return newSum;
         }
       }
@@ -325,12 +484,13 @@ public class UExprConcreteTranslator {
           final UnaryOpKind unaryOpKind = node.$(ExprFields.Unary_Op);
           switch (unaryOpKind) {
             case NOT -> {
-              if(node.$(ExprFields.Unary_Expr).$(Expr_Kind) == Binary
+              // NOT (x IN (... NULL ...)) -> FALSE/NULL
+              if (node.$(ExprFields.Unary_Expr).$(Expr_Kind) == Binary
                       && node.$(ExprFields.Unary_Expr).$(ExprFields.Binary_Op) == IN_LIST) {
-                for(final SqlNode sqlNode : node.$(ExprFields.Unary_Expr).$(ExprFields.Binary_Right).$(ExprFields.Tuple_Exprs)) {
+                for (final SqlNode sqlNode : node.$(ExprFields.Unary_Expr).$(ExprFields.Binary_Right).$(ExprFields.Tuple_Exprs)) {
                   final ComposedUTerm tupleElementUTerm = mkValue(exprCtx, sqlNode, baseVar);
                   final UTerm rhsElementUTerm = tupleElementUTerm.toPredUTerm();
-                  if(rhsElementUTerm.equals(UConst.nullVal())) {
+                  if (rhsElementUTerm.equals(UConst.nullVal())) {
                     return UConst.zero();
                   }
                 }
@@ -372,7 +532,7 @@ public class UExprConcreteTranslator {
               }
             }
             throw new IllegalArgumentException("Unsupported rhs value of IS operator");
-          } else if (isComparisonOp(binaryOpKind)) {
+          } else if (binaryOpKind.isComparison()) {
             if (hasNullInArithmeticExpression(node))
               return UConst.zero();
             if (binaryOpKind == BinaryOpKind.EQUAL && Literal.isInstance(node.$(ExprFields.Binary_Right))) {
@@ -477,12 +637,27 @@ public class UExprConcreteTranslator {
             return USquash.mk(decoratedRhs);
           }
 
-          if(binaryOpKind == IN_LIST) {
+          if (binaryOpKind == IN_LIST) {
 //            final UTerm lhsPred = mkPredicate0(exprCtx, node.$(ExprFields.Binary_Left), baseVar);
             final ComposedUTerm lhsComposedUTerm = mkValue(exprCtx, node.$(ExprFields.Binary_Left), baseVar);
-            List<UTerm> OR_terms = new ArrayList<>();
             final UTerm lhsUTerm = lhsComposedUTerm.toPredUTerm();
-            for(final SqlNode sqlNode : node.$(ExprFields.Binary_Right).$(ExprFields.Tuple_Exprs)) {
+            SqlNodes rhs = node.$(ExprFields.Binary_Right).$(ExprFields.Tuple_Exprs);
+            int listSize = rhs.size();
+
+            if (!explainsPredicates && listSize > 1) {
+              List<UTerm> arguments = new ArrayList<>();
+              arguments.add(lhsUTerm);
+              for (SqlNode sqlNode : rhs) {
+                ComposedUTerm arg = mkValue(exprCtx, sqlNode, baseVar);
+                arguments.add(arg.toPredUTerm());
+              }
+              String funcName = PredefinedFunctions.instantiateFamilyFunc(PredefinedFunctions.NAME_IN_LIST, arguments.size());
+              UTerm in = UFunc.mk(UFunc.FuncKind.INTEGER, UName.mk(funcName), arguments);
+              return UPred.mkBinary(GT, in, UConst.zero());
+            }
+
+            List<UTerm> OR_terms = new ArrayList<>();
+            for (final SqlNode sqlNode : rhs) {
               final ComposedUTerm tupleElementUTerm = mkValue(exprCtx, sqlNode, baseVar);
               final UTerm rhsElementUTerm = tupleElementUTerm.toPredUTerm();
               OR_terms.add(UPred.mkBinary(EQ, lhsUTerm, rhsElementUTerm));
@@ -490,21 +665,36 @@ public class UExprConcreteTranslator {
             return USquash.mk(UAdd.mk(OR_terms));
           }
 
-          if(binaryOpKind == LIKE) {
+          if (binaryOpKind == LIKE) {
             final ComposedUTerm lhsComposedUTerm = mkValue(exprCtx, node.$(ExprFields.Binary_Left), baseVar);
             final ComposedUTerm rhsComposedUTerm = mkValue(exprCtx, node.$(ExprFields.Binary_Right), baseVar);
-            if(rhsComposedUTerm.toPredUTerm() instanceof UString string) {
+            if (rhsComposedUTerm.toPredUTerm() instanceof UString string) {
               String regex = "[a-zA-Z]+$";
               Pattern pattern = Pattern.compile(regex);
               Matcher matcher = pattern.matcher(string.value());
               // TODO: Only consider equal case here
-              if(matcher.matches()) {
+              if (matcher.matches()) {
                 return UPred.mkBinary(EQ, lhsComposedUTerm.toPredUTerm(), rhsComposedUTerm.toPredUTerm());
               }
             }
+            // translate LIKE into an uninterpreted function
+            final List<UTerm> arguments = new ArrayList<>(Arrays.asList(lhsComposedUTerm.toPredUTerm(),
+                    rhsComposedUTerm.toPredUTerm()));
+            UTerm like = UFunc.mk(UFunc.FuncKind.STRING, UName.mk(PredefinedFunctions.NAME_LIKE), arguments);
+            return UPred.mkBinary(GT, like, UConst.zero());
           }
 
           throw new IllegalArgumentException("Unsupported binary operator: " + binaryOpKind);
+        }
+        case Ternary -> {
+          // only case for Between And
+          final TernaryOp ternaryOp = node.$(ExprFields.Ternary_Op);
+          assert ternaryOp == TernaryOp.BETWEEN_AND;
+          final ComposedUTerm lhs = mkValue(exprCtx, node.$(ExprFields.Ternary_Left), baseVar);
+          final ComposedUTerm mhs = mkValue(exprCtx, node.$(ExprFields.Ternary_Middle), baseVar);
+          final ComposedUTerm rhs = mkValue(exprCtx, node.$(ExprFields.Ternary_Right), baseVar);
+          return UMul.mk(ComposedUTerm.doComparatorOp(lhs, mhs, GREATER_OR_EQUAL),
+                          ComposedUTerm.doComparatorOp(lhs, rhs, LESS_OR_EQUAL));
         }
         case Case -> {
           final SqlNodes whens = node.$(ExprFields.Case_Whens);
@@ -568,7 +758,7 @@ public class UExprConcreteTranslator {
         }
         case FuncCall -> {
           String functionName = node.$(ExprFields.FuncCall_Name).toString();
-          if(functionName.equals("`if`")) {
+          if (functionName.equals("`if`")) {
             final SqlNodes args = node.$(ExprFields.FuncCall_Args);
             assert args.size() == 3;
             final UTerm condition = mkPredicate(exprCtx, args.get(0), baseVar);
@@ -578,14 +768,6 @@ public class UExprConcreteTranslator {
             IF.add(UMul.mk(condition, firstCase));
             IF.add(UMul.mk(UNeg.mk(condition.copy()), secondCase));
             return UAdd.mk(IF);
-          }
-          if(functionName.equals("`like_op`")) {
-            final SqlNodes args = node.$(ExprFields.FuncCall_Args);
-            assert args.size() == 2;
-            final ComposedUTerm variable = mkValue(exprCtx, args.get(0), baseVar);
-            final ComposedUTerm constant = mkValue(exprCtx, args.get(1), baseVar);
-            final List<UTerm> arguments = new ArrayList<>(Arrays.asList(variable.toPredUTerm(), constant.toPredUTerm()));
-            return UFunc.mk(UFunc.FuncKind.STRING, UName.mk(functionName), arguments);
           }
         }
       }
@@ -636,6 +818,11 @@ public class UExprConcreteTranslator {
             default -> throw new IllegalArgumentException("Unsupported literal value type: " + literalKind);
           }
         }
+        case Symbol -> {
+          // same as Literal String
+          final String value = node.$(ExprFields.Symbol_Text);
+          return ComposedUTerm.mk(UString.mk(value));
+        }
         case Binary -> {
           final BinaryOpKind binaryOpKind = node.$(ExprFields.Binary_Op);
           if(binaryOpKind == IN_SUBQUERY) {
@@ -648,7 +835,7 @@ public class UExprConcreteTranslator {
 
           if (binaryOpKind.isArithmetic()) {
             return ComposedUTerm.doArithmeticOp(lhs, rhs, binaryOpKind);
-          } else if (isComparisonOp(binaryOpKind)) {
+          } else if (binaryOpKind.isComparison()) {
             return ComposedUTerm.mk(ComposedUTerm.doComparatorOp(lhs, rhs, binaryOpKind));
           } else if (isOrConcatOp(binaryOpKind, node.$(ExprFields.Binary_Left), node.$(ExprFields.Binary_Right))) {
             UName funcName = UName.mk("`concat`");
@@ -656,6 +843,8 @@ public class UExprConcreteTranslator {
             arguments.add(lhs);
             arguments.add(rhs);
             return ComposedUTerm.mk(ComposedUTerm.mkFuncCall(UFunc.FuncKind.STRING, funcName, arguments));
+          } else if (binaryOpKind.isLogic()) {
+            return ComposedUTerm.doLogicOp(lhs, rhs, binaryOpKind);
           }
         }
         case Unary -> {
@@ -786,16 +975,6 @@ public class UExprConcreteTranslator {
             || hasNullInArithmeticExpression(node.$(ExprFields.Binary_Right));
 
       return false;
-    }
-
-    private static boolean isComparisonOp(BinaryOpKind opKind) {
-      return opKind == BinaryOpKind.EQUAL
-          || opKind == BinaryOpKind.NOT_EQUAL
-          || opKind == BinaryOpKind.LESS_THAN
-          || opKind == BinaryOpKind.LESS_OR_EQUAL
-          || opKind == BinaryOpKind.GREATER_THAN
-          || opKind == BinaryOpKind.GREATER_OR_EQUAL
-          || opKind == BinaryOpKind.IS;
     }
 
     private static boolean isConcatOp(BinaryOpKind opKind) {
@@ -965,27 +1144,52 @@ public class UExprConcreteTranslator {
       return UMul.mk(lhs, decoratedRhs);
     }
 
+    private UVar generateOutVarSchema(UVar visibleVar, List<Value> outputValues) {
+      UVar outVar;
+      if (hasSameSourceColumns(outputValues)) {
+        // Special case: there are output columns from the same source
+        // should eliminate the ambiguity
+        outVar = mkFreshVarFrom(visibleVar);
+        if (outVar.is(UVar.VarKind.BASE))
+          putTupleVarSchema(outVar, outputValues);
+        else if (outVar.is(UVar.VarKind.CONCAT))
+          outVar = putConcatVarSchema(outVar, visibleVar, outputValues);
+        else assert false;
+      } else {
+        // Common case
+        outVar = mkFreshBaseVar();
+        putTupleVarSchema(outVar, outputValues);
+      }
+      push(visibleVars, outVar);
+      return outVar;
+    }
+
     private UTerm trProj(int nodeId) {
       final UTerm predecessor = tr(plan.childOf(nodeId, 0));
       if (predecessor == null) return null;
+
+      /*
+       * Generate the output var and schema
+       */
 
       final ProjNode proj = (ProjNode) plan.nodeAt(nodeId);
       final UVar visibleVar = pop(visibleVars);
       assert visibleVar != null;
 
-      final UVar outBaseVar = mkFreshBaseVar();
       final List<Value> outputValues = plan.valuesReg().valuesOf(nodeId);
-      putTupleVarSchema(outBaseVar, outputValues);
-      push(visibleVars, outBaseVar);
+      UVar outVar = generateOutVarSchema(visibleVar, outputValues);
 
-      final UTerm eqCond = mkProjEqCond(outputValues, proj.attrExprs(), outBaseVar, visibleVar);
+      /*
+       * Generate the summation body
+       */
+
+      final UTerm eqCond = mkProjEqCond(outputValues, proj.attrExprs(), outVar, visibleVar);
       if (eqCond == null) return null;
-
 
       // Case 1. Common summation introduced by Proj, since input expr is not from VALUES table
       if (all(UVar.getBaseVars(visibleVar), v -> cannotEnumerateProjSummation(predecessor, v))) {
         UTerm summation = USum.mk(UVar.getBaseVars(visibleVar), UMul.mk(eqCond, predecessor));
-        if(isSingleValueProj(proj.attrExprs())) {
+        if (isSingleValueProj(proj.attrExprs())) {
           final UTerm firstPred = UPred.mkBinary(EQ, (proj.deduplicated() ? USquash.mk(summation) : summation), UConst.one());
           final UTerm secondPred = UPred.mkBinary(EQ, USum.mk(UVar.getBaseVars(visibleVar), predecessor.copy()), UConst.one());
           return UMul.mk(firstPred, secondPred);
@@ -1169,7 +1373,7 @@ public class UExprConcreteTranslator {
       for (int i = 0, bound = outputs.size(); i < bound; ++i) {
         final UVar outProjVar = mkProjVar(outputs.get(i), outVar);
         final ComposedUTerm projTargetTerm = mkValue(projList.get(i), projList.get(i).template(), inVar);
-        if(projListEqNull(projList.get(i).template())) {
+        if (projListEqNull(projList.get(i).template())) {
           final UTerm freeProjTerm = mkIsNullPred(outProjVar);
           eqs.add(freeProjTerm);
           continue;
@@ -1334,10 +1538,8 @@ public class UExprConcreteTranslator {
       final UVar visibleVar = pop(visibleVars);
       assert visibleVar != null;
 
-      final UVar outBaseVar = mkFreshBaseVar();
       final List<Value> outputValues = plan.valuesReg().valuesOf(nodeId);
-      putTupleVarSchema(outBaseVar, outputValues);
-      push(visibleVars, outBaseVar);
+      final UVar outVar = generateOutVarSchema(visibleVar, outputValues);
 
       final List<Expression> aggregateExprs = new ArrayList<>(3);
       final List<Value> aggregateOutputs = new ArrayList<>(3);
@@ -1358,7 +1560,7 @@ public class UExprConcreteTranslator {
       // Part1: Eq-conditions for common projected columns in select list
       final UTerm commonProjBody = commonProjExprs.isEmpty() ?
           predecessor :
-          UMul.mk(predecessor, mkProjEqCond(commonProjOutputs, commonProjExprs, outBaseVar, visibleVar));
+          UMul.mk(predecessor, mkProjEqCond(commonProjOutputs, commonProjExprs, outVar, visibleVar));
       if (!commonProjExprs.isEmpty()) {
         final UTerm commonProjTerm = USquash.mk(USum.mk(UVar.getBaseVars(visibleVar), commonProjBody));
         subTerms.add(commonProjTerm);
@@ -1367,7 +1569,7 @@ public class UExprConcreteTranslator {
       // Part2: Eq-conditions for Aggregated result in select list
       if (!aggregateExprs.isEmpty()) {
         final UTerm aggregateTerm =
-            mkAggOutVarEqCond(aggregateOutputs, aggregateExprs, outBaseVar, visibleVar, commonProjBody.copy(),
+            mkAggOutVarEqCond(aggregateOutputs, aggregateExprs, outVar, visibleVar, commonProjBody.copy(),
                     commonProjExprs.isEmpty() && isPredLiteralFalse(plan.childOf(plan.childOf(nodeId, 0), 0)));
         if (aggregateTerm == null) return null;
         subTerms.add(aggregateTerm);
@@ -1378,8 +1580,8 @@ public class UExprConcreteTranslator {
         UTerm havingPred = null;
         for (int i = 0, bound = agg.attrExprs().size(); i < bound; ++i) {
           if (agg.havingExpr().toString().equals(agg.attrExprs().get(i).toString())) {
-            final UVar havingPredProjVar = mkProjVar(outputValues.get(i), outBaseVar);
-            havingPred = mkPredicate(agg.havingExpr(), agg.havingExpr().template(), outBaseVar);
+            final UVar havingPredProjVar = mkProjVar(outputValues.get(i), outVar);
+            havingPred = mkPredicate(agg.havingExpr(), agg.havingExpr().template(), outVar);
           }
         }
         if (havingPred != null) {
@@ -1440,8 +1642,13 @@ public class UExprConcreteTranslator {
           }
       }
       for(String selectListColRef : selectListColRefs) {
-          if(!groupByColRefs.contains(selectListColRef))
+          if(!groupByColRefs.contains(selectListColRef)) {
+            if(isTargetSide)
+              System.err.println("Select list not in Group list target");
+            else
+              System.err.println("Select list not in Group list source");
             return true;
+          }
       }
 //      for(String groupByColRef : groupByColRefs) {
 //        if(!selectListColRefs.contains(groupByColRef))
@@ -1479,7 +1686,6 @@ public class UExprConcreteTranslator {
         UTerm groupByTerm,
         boolean isNullReturn) {
       assert outputs.size() == aggList.size();
-      assert outVar.is(UVar.VarKind.BASE);
 
       final List<UTerm> subTerms = new ArrayList<>();
       for (int i = 0, bound = outputs.size(); i < bound; ++i) {
@@ -1701,16 +1907,18 @@ public class UExprConcreteTranslator {
     }
 
     private UTerm commonNormalize(UTerm expr) {
-      return new QueryUExprNormalizer(expr, schema, this).commonNormalizeTerm();
+      return new QueryUExprNormalizer(expr, schema, this, icFreshVars).commonNormalizeTerm();
     }
 
-    private UTerm normalizeRegroup(UTerm expr) {
-      return new QueryUExprNormalizer(expr, schema,this).normalizeTermRegroup();
+    private UTerm normalizeRegroup(UTerm expr, Set<UVar> boundVarSet) {
+      return new QueryUExprNormalizer(expr, schema, this).normalizeTermRegroup(boundVarSet);
     }
 
     private UTerm  normalizeWithIntegrityConstraints(UTerm expr) {
-      return new QueryUExprICRewriter(expr, schema, this).normalizeTerm();
-
+      QueryUExprICRewriter icRewriter = new QueryUExprICRewriter(expr, schema, this);
+      expr = icRewriter.normalizeTerm();
+      icFreshVars.addAll(icRewriter.getIcFreshVars());
+      return expr;
     }
 
     /**
@@ -1789,7 +1997,9 @@ public class UExprConcreteTranslator {
                 finalValue = value.copy();
               // TODO: handler other cases for finalValue
               else throw new IllegalArgumentException("Unsupported unary operator: " + opKind);
-            } else throw new IllegalArgumentException("Unsupported unary operator: " + opKind);
+            } else {
+              finalValue = UNeg.mk(value.copy());
+            }
           }
           default -> throw new IllegalArgumentException("Unsupported unary operator: " + opKind);
         }
@@ -1845,7 +2055,7 @@ public class UExprConcreteTranslator {
     }
 
     static UTerm doComparatorOp(ComposedUTerm pred0, ComposedUTerm pred1, BinaryOpKind opKind) {
-      assert QueryTranslator.isComparisonOp(opKind);
+      assert opKind.isComparison();
       final List<UTerm> subTerms = new ArrayList<>();
       for (var pair0 : pred0.preCondAndValues) {
         for (var pair1 : pred1.preCondAndValues) {
@@ -1861,7 +2071,13 @@ public class UExprConcreteTranslator {
             if (value0.equals(UConst.NULL)) compareTerm = mkIsNullPred(value1.copy());
             else if (value1.equals(UConst.NULL)) compareTerm = mkIsNullPred(value0.copy());
             else compareTerm = UPred.mkBinary(EQ, value0.copy(), value1.copy());
-          } else {
+          } else if (opKind == BinaryOpKind.NULL_SAFE_EQUAL) {
+            // Also used in `mkProjEqCond` for tuple's attribute mapping
+            if (value0.equals(UConst.NULL)) compareTerm = mkIsNullPred(value1.copy());
+            else if (value1.equals(UConst.NULL)) compareTerm = mkIsNullPred(value0.copy());
+            else compareTerm = UPred.mkBinary(EQ, value0.copy(), value1.copy());
+          }
+          else {
             // But `mkInSubEqCond` uses code here, since attrs of In sub-query should be not NULL
             if (value0.equals(UConst.NULL) || value1.equals(UConst.NULL))
               compareTerm = UConst.zero();
@@ -1877,6 +2093,30 @@ public class UExprConcreteTranslator {
         }
       }
       return UAdd.mk(subTerms);
+    }
+
+    static ComposedUTerm doLogicOp(ComposedUTerm pred0, ComposedUTerm pred1, BinaryOpKind opKind) {
+      assert opKind.isLogic();
+      final List<Pair<UTerm, UTerm>> pair = new ArrayList<>();
+      for (var pair0 : pred0.preCondAndValues) {
+        for (var pair1 : pred1.preCondAndValues) {
+          final UTerm preCond0 = pair0.getLeft(), preCond1 = pair1.getLeft();
+          final UTerm value0 = pair0.getRight(), value1 = pair1.getRight();
+          final UTerm combinedPreCond;
+          if (preCond0.equals(UConst.ONE)) combinedPreCond = preCond1.copy();
+          else if (preCond1.equals(UConst.ONE)) combinedPreCond = preCond0.copy();
+          else combinedPreCond = UMul.mk(preCond0.copy(), preCond1.copy());
+          final UTerm combinedValue;
+          switch (opKind) {
+            case OR -> combinedValue = UAdd.mk(value0.copy(), value1.copy());
+            case AND -> combinedValue = UMul.mk(value0.copy(), value1.copy());
+            default -> throw new IllegalArgumentException("Unsupported binary operator: " + opKind);
+          }
+          pair.add(Pair.of(combinedPreCond, combinedValue));
+        }
+      }
+
+      return ComposedUTerm.mk(pair);
     }
 
     static UTerm mkFuncCall(UFunc.FuncKind funcKind, UName funcName, List<ComposedUTerm> arguments) {

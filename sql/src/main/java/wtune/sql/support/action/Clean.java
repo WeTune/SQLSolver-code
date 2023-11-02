@@ -39,6 +39,7 @@ class Clean {
 
   private static boolean deleteBoolConstant(SqlNode node) {
     final SqlNode parent = node.parent();
+    final SqlNode grandParent = parent.parent();
 
     if (nodeEquals(node, parent.$(QuerySpec_Where)) && node.$(ExprFields.Literal_Value)!=null && (Boolean) node.$(ExprFields.Literal_Value)) {
       parent.remove(QuerySpec_Where);
@@ -46,6 +47,26 @@ class Clean {
 
     } else if (ExprKind.Binary.isInstance(parent) && parent.$(ExprFields.Binary_Op).isLogic()) {
       final SqlNode lhs = parent.$(ExprFields.Binary_Left), rhs = parent.$(ExprFields.Binary_Right);
+      // TRUE <=> (... OR NULL) => TRUE <=> (...)
+      if(ExprKind.Binary.isInstance(grandParent)
+              && grandParent.$(ExprFields.Binary_Op).precedence() == BinaryOpKind.NULL_SAFE_EQUAL.precedence()) {
+        final SqlNode glhs = grandParent.$(ExprFields.Binary_Left), grhs = grandParent.$(ExprFields.Binary_Right);
+        if((nodeEquals(glhs, parent) && grhs.$(ExprFields.Literal_Value)!=null && (Boolean) grhs.$(ExprFields.Literal_Value))
+           || (nodeEquals(grhs, parent) && glhs.$(ExprFields.Literal_Value)!=null && (Boolean) glhs.$(ExprFields.Literal_Value))) {
+          // replacement
+          if (nodeEquals(lhs, node) && parent.$(ExprFields.Binary_Op) == BinaryOpKind.OR &&
+                  lhs.$(Expr_Kind) == ExprKind.Literal && lhs.$(ExprFields.Literal_Value) == null) {
+            node.context().displaceNode(parent.nodeId(), rhs.nodeId());
+            return true;
+          }
+          if (nodeEquals(rhs, node) && parent.$(ExprFields.Binary_Op) == BinaryOpKind.OR &&
+                  rhs.$(Expr_Kind) == ExprKind.Literal && rhs.$(ExprFields.Literal_Value) == null) {
+            node.context().displaceNode(parent.nodeId(), lhs.nodeId());
+            return true;
+          }
+        }
+      }
+
       if (nodeEquals(lhs, node) && parent.$(ExprFields.Binary_Op) == BinaryOpKind.OR &&
               lhs.$(ExprFields.Literal_Value)!=null && (Boolean) lhs.$(ExprFields.Literal_Value) ) {
         node.context().displaceNode(parent.nodeId(), lhs.nodeId());
@@ -66,14 +87,30 @@ class Clean {
         node.context().displaceNode(parent.nodeId(), rhs.nodeId());
         return true;
       }
+      // TRUE AND NULL -> NULL
+      // FALSE AND NULL -> FALSE
       if (nodeEquals(lhs, node) && parent.$(ExprFields.Binary_Op) == BinaryOpKind.AND &&
+              rhs.$(ExprFields.Literal_Value)!=null && (Boolean) rhs.$(ExprFields.Literal_Value) &&
               lhs.$(Expr_Kind) == ExprKind.Literal && lhs.$(ExprFields.Literal_Value) == null) {
         node.context().displaceNode(parent.nodeId(), lhs.nodeId());
         return true;
       }
       if (nodeEquals(rhs, node) && parent.$(ExprFields.Binary_Op) == BinaryOpKind.AND &&
+              lhs.$(ExprFields.Literal_Value)!=null && (Boolean) lhs.$(ExprFields.Literal_Value) &&
               rhs.$(Expr_Kind) == ExprKind.Literal && rhs.$(ExprFields.Literal_Value) == null) {
         node.context().displaceNode(parent.nodeId(), rhs.nodeId());
+        return true;
+      }
+      if (nodeEquals(lhs, node) && parent.$(ExprFields.Binary_Op) == BinaryOpKind.AND &&
+              rhs.$(ExprFields.Literal_Value)!=null && !(Boolean) rhs.$(ExprFields.Literal_Value) &&
+              lhs.$(Expr_Kind) == ExprKind.Literal && lhs.$(ExprFields.Literal_Value) == null) {
+        node.context().displaceNode(parent.nodeId(), rhs.nodeId());
+        return true;
+      }
+      if (nodeEquals(rhs, node) && parent.$(ExprFields.Binary_Op) == BinaryOpKind.AND &&
+              lhs.$(ExprFields.Literal_Value)!=null && !(Boolean) lhs.$(ExprFields.Literal_Value) &&
+              rhs.$(Expr_Kind) == ExprKind.Literal && rhs.$(ExprFields.Literal_Value) == null) {
+        node.context().displaceNode(parent.nodeId(), lhs.nodeId());
         return true;
       }
 //      if (nodeEquals(lhs, node)) {

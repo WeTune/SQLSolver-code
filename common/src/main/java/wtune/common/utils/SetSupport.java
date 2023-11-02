@@ -27,4 +27,16 @@ public interface SetSupport {
   static <T, R> Set<R> flatMap(Iterable<T> os, Function<? super T, ? extends Iterable<R>> func) {
     return IterableSupport.stream(os).map(func).flatMap(IterableSupport::stream).collect(Collectors.toSet());
   }
+
+  static <T> Set<T> minus(Set<T> s1, Set<T> s2) {
+    Set<T> copy = new HashSet<>(s1);
+    copy.removeAll(s2);
+    return copy;
+  }
+
+  static <T> Set<T> intersect(Set<T> s1, Set<T> s2) {
+    Set<T> copy = new HashSet<>(s1);
+    copy.retainAll(s2);
+    return copy;
+  }
 }

@@ -85,6 +85,18 @@ public enum BinaryOpKind {
     return precedence <= AND.precedence;
   }
 
+  public boolean isComparison() {
+    return this == EQUAL
+            || this == IS
+            || this == NULL_SAFE_EQUAL
+            || this == GREATER_OR_EQUAL
+            || this == GREATER_THAN
+            || this == LESS_OR_EQUAL
+            || this == LESS_THAN
+            || this == NOT_EQUAL;
+
+  }
+
   public int precedence() {
     return precedence;
   }

@@ -25,4 +25,5 @@ gradlew
 gradlew.bat
 gradle/
 enum.log*
+target/
 #support/

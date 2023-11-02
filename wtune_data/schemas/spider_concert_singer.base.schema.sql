@@ -25,7 +25,7 @@ concert_ID INT,
 concert_Name VARCHAR(255),
 Theme VARCHAR(255),
 Stadium_ID INT,
-Yearr VARCHAR(255),
+Year VARCHAR(255),
 PRIMARY KEY (concert_ID),
 FOREIGN KEY (Stadium_ID) REFERENCES stadium(Stadium_ID)
 );

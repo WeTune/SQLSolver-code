@@ -53,12 +53,19 @@ public class SqlSolver {
     preprocess();
     if (LogicSupport.dumpLiaFormulas) {
       System.out.println("==> Rewritten UExpressions sent to Lia solver: ");
-      System.out.println("[[q0]](" + outVar1 + ") := " + query1);
-      System.out.println("[[q1]](" + outVar2 + ") := " + query2);
+      System.out.println("[[q0]](" + outVar1 + ") := ");
+      query1.prettyPrint();
+      System.out.println();
+      System.out.println("[[q1]](" + outVar2 + ") := ");
+      query2.prettyPrint();
+      System.out.println();
     }
-    if(query1.equals(query2)) {
+    UMulImpl.useWeakEquals = true;
+    if (query1.equals(query2)) {
+      UMulImpl.useWeakEquals = false;
       return LogicSupport.EQ;
     }
+    UMulImpl.useWeakEquals = false;
 //    if(!needLia(query1, query2)) {
 //      uExprsResult.setSrcExpr(query1.copy());
 //      uExprsResult.setTgtExpr(query2.copy());
@@ -143,9 +150,11 @@ public class SqlSolver {
     query1 = concretizeBoundedVars(query1.copy(), outerVars);
     query1 = propagateNullValue(query1);
     query1 = propagateConstant(query1, new HashMap<>());
+    query1.sortCommAssocItems();
     query2 = concretizeBoundedVars(query2.copy(), outerVars);
     query2 = propagateNullValue(query2);
     query2 = propagateConstant(query2, new HashMap<>());
+    query2.sortCommAssocItems();
   }
 
 

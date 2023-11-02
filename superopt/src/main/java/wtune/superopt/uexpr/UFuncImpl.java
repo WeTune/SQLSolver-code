@@ -1,8 +1,9 @@
 package wtune.superopt.uexpr;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.SetMatching;
+
+import java.util.*;
 
 import static wtune.common.utils.IterableSupport.any;
 import static wtune.superopt.uexpr.UExprSupport.transformTerms;
@@ -73,11 +74,93 @@ public class UFuncImpl implements UFunc {
   }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    if (this.equals(baseTerm)) return repTerm.copy();
+    final List<UTerm> replaced = transformTerms(arguments, t -> t.replaceAtomicTermExcept(baseTerm, repTerm, exceptTerm));
+    return UFunc.mk(funcKind, funcName, replaced);
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     if (this.equals(baseTerm)) return repTerm.copy();
     final List<UTerm> replaced = transformTerms(arguments, t -> t.replaceAtomicTerm(baseTerm, repTerm));
     return UFunc.mk(funcKind, funcName, replaced);
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    printer.print(funcName);
+    printer.print("(");
+    int indent = funcName.toString().length() + 1;
+    printer.indent(indent);
+    for (int i = 0; i < arguments.size(); i++) {
+      UTerm arg = arguments.get(i);
+      if (arg.isPrettyPrintMultiLine()) printer.println();
+      arg.prettyPrint(printer);
+      if (i < arguments.size() - 1) {
+        printer.print(", ");
+      }
+      if (arg.isPrettyPrintMultiLine()) printer.println();
+    }
+    printer.indent(-indent);
+    printer.print(")");
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    for (UTerm arg : arguments) {
+      if (arg.isPrettyPrintMultiLine()) return true;
+    }
+    return false;
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    int size = arguments.size();
+    int[] hashes = new int[size + 2];
+    for (int i = 0; i < size; i++) {
+      hashes[i] = arguments.get(i).hashForSort(varHash);
+    }
+    hashes[size] = funcKind.hashCode();
+    hashes[size + 1] = funcName.hashCode();
+    return Arrays.hashCode(hashes);
+  }
+
+  @Override
+  public void sortCommAssocItems() {
+    for (UTerm term : arguments) {
+      term.sortCommAssocItems();
+    }
+  }
+
+  @Override
+  public Set<String> getFVs() {
+    Set<String> fvs = new HashSet<>();
+    for (UTerm arg : arguments) {
+      fvs.addAll(arg.getFVs());
+    }
+    return fvs;
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    if (that instanceof UFunc func) {
+      int size = arguments.size();
+      if (funcKind != func.funcKind()
+              || !Objects.equals(funcName, func.funcName())
+              || size != func.args().size())
+        return false;
+      List<UTerm> thatArgs = func.args();
+      for (int i = 0; i < size; i++) {
+        if (!arguments.get(i).groupSimilarVariables(thatArgs.get(i), matching))
+          return false;
+      }
+      return true;
+    }
+    return false;
   }
 
   @Override

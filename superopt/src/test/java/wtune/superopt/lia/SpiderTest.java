@@ -1,52 +1,37 @@
 package wtune.superopt.lia;
 
 import org.junit.jupiter.api.Test;
-import wtune.common.utils.IOSupport;
-import wtune.common.utils.IterableSupport;
 import wtune.sql.SqlSupport;
 import wtune.sql.ast.SqlNode;
-import wtune.sql.ast.constants.JoinKind;
 import wtune.sql.plan.*;
-import wtune.sql.preprocess.CastHandler;
+import wtune.sql.preprocess.SqlNodePreprocess;
 import wtune.sql.schema.Schema;
 import wtune.sql.support.action.NormalizationSupport;
 import wtune.stmt.App;
 import wtune.superopt.logic.CASTSupport;
 import wtune.superopt.logic.LogicSupport;
 import wtune.superopt.logic.SqlSolver;
-import wtune.superopt.substitution.Substitution;
-import wtune.superopt.substitution.SubstitutionBank;
-import wtune.superopt.substitution.SubstitutionSupport;
 import wtune.superopt.uexpr.UExprConcreteTranslationResult;
-import wtune.superopt.uexpr.UExprConcreteTranslator;
 import wtune.superopt.uexpr.UExprSupport;
-import wtune.superopt.uexpr.UExprTranslationResult;
-import wtune.superopt.uexpr.normalizar.QueryUExprICRewriter;
+import wtune.superopt.uexpr.normalizer.QueryUExprICRewriter;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static wtune.common.datasource.DbSupport.MySQL;
 import static wtune.sql.SqlSupport.*;
 import static wtune.sql.plan.PlanSupport.*;
-import static wtune.superopt.TestHelper.dataDir;
 import static wtune.superopt.logic.LogicSupport.*;
 public class SpiderTest {
 
     @Test
     void testLiaOnExampleSql() throws IOException {
         LogicSupport.setDumpLiaFormulas(true);
-        QueryPair pair = readPair(
-                "SELECT count(*) ,  t2.name FROM hiring AS t1 JOIN shop AS t2 ON t1.shop_id  =  t2.shop_id GROUP BY t2.name",
-                "SELECT count(Employee_ID) ,  Name FROM hiring JOIN shop ON hiring.Shop_ID  =  shop.Shop_ID GROUP BY hiring.Shop_ID ,  shop.Name",
-                "spider_world_1"
-        );
+    QueryPair pair =
+        readPair(
+            "SELECT Name FROM country WHERE Continent  =  \"Asia\"  AND population  >  (SELECT min(population) FROM country WHERE Continent  =  \"Africa\")",
+            "SELECT Name FROM country WHERE Continent = 'Asia' AND Population > (SELECT max(Population) FROM country WHERE Continent = 'Africa')",
+            "spider_world_1");
         SqlSolver.initialize();
         QueryUExprICRewriter.selectIC(-1);
 
@@ -89,7 +74,7 @@ public class SpiderTest {
     private QueryPair readPair(String sql0, String sql1, String appName) {
         final App app = App.of(appName);
         final Schema schema = app.schema("base");
-        CastHandler.setSchema(schema);
+        SqlNodePreprocess.setSchema(schema);
         CASTSupport.setSchema(schema);
         SqlSupport.muteParsingError();
 

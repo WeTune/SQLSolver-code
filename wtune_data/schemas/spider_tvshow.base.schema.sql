@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS TV_Channel (
 id TEXT PRIMARY KEY,
 series_name TEXT,
 Country TEXT,
-Languagee TEXT,
+Language TEXT,
 Content TEXT,
 Pixel_aspect_ratio_PAR TEXT,
 Hight_definition_TV TEXT,

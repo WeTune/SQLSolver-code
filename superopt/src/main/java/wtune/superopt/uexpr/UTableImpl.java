@@ -1,8 +1,11 @@
 package wtune.superopt.uexpr;
 
-import java.util.List;
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.SetMatching;
 
-import static wtune.superopt.uexpr.UExprSupport.transformTerms;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 final class UTableImpl implements UTable {
   private final UName tableName;
@@ -60,10 +63,50 @@ final class UTableImpl implements UTable {
   }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    if (this.equals(baseTerm)) return repTerm.copy();
+    return this.copy();
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     if (this.equals(baseTerm)) return repTerm.copy();
     return this.copy();
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    printer.print(this);
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    return false;
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    return Objects.hash(tableName.hashCode(), var.hashForSort(varHash));
+  }
+
+  @Override
+  public void sortCommAssocItems() {}
+
+  @Override
+  public Set<String> getFVs() {
+    return var.getFVs();
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    if (that instanceof UTable table) {
+      if (!Objects.equals(tableName, table.tableName())) return false;
+      return var.groupSimilarVariables(table.var(), matching);
+    }
+    return false;
   }
 
   @Override

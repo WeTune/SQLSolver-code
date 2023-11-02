@@ -81,7 +81,8 @@ public class RunCalciteCasesWeTune implements Runner {
     outDir = parentDir.resolve("run" + subDirSuffix);
     outOpt = outDir.resolve("1_query.tsv");
 
-    app = App.of("calcite_test");
+    String appName = args.getOptional("A", "app", String.class, "calcite_test");
+    app = App.of(appName);
     target = args.getOptional("T", "task", String.class, "all");
     verbosity = args.getOptional("v", "verbose", int.class, 0);
 
@@ -199,6 +200,7 @@ public class RunCalciteCasesWeTune implements Runner {
 
     final SubstitutionBank rules = this.rules.get();
     final List<QueryPair> pairs = this.queryPairs.get();
+    System.out.println("Recognized " + pairs.size() + " pairs of SQL.");
 
     int eqCount = 0;
     long totalTime = 0, totalTimeEQ = 0;

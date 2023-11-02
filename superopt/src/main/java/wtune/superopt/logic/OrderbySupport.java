@@ -1,5 +1,9 @@
 package wtune.superopt.logic;
 
+import wtune.sql.ast.ExprFields;
+import wtune.sql.ast.ExprKind;
+import wtune.sql.ast.SqlNode;
+import wtune.sql.ast.SqlNodeFields;
 import wtune.sql.ast.constants.JoinKind;
 import wtune.sql.ast.constants.SetOpKind;
 import wtune.sql.plan.*;
@@ -88,6 +92,15 @@ public class OrderbySupport {
     }
   }
 
+  boolean isOrderByConstant(SortNode sort) {
+    for(final Expression expression : sort.sortSpec()) {
+      final SqlNode expressionNode = expression.template().$(SqlNodeFields.OrderItem_Expr);
+      if(expressionNode == null) continue;
+      if(expressionNode.$(SqlNodeFields.Expr_Kind) != ExprKind.Literal) return false;
+    }
+    return true;
+  }
+
   boolean hasOrderBy(PlanContext p, int nodeId) {
     return hasNodeOfKind(p, PlanKind.Sort) || hasNodeOfKind(p, PlanKind.Limit);
   }
@@ -147,13 +160,40 @@ public class OrderbySupport {
     final int parent0 = p0.parentOf(sortNodeId0);
     final int parent1 = p1.parentOf(sortNodeId1);
 
-    final String sortSpec0 = ((SortNode)p0.nodeAt(sortNodeId0)).sortSpec().toString();
-    final String sortSpec1 = ((SortNode)p1.nodeAt(sortNodeId1)).sortSpec().toString();
+    final List<Expression> sortSpec0 = ((SortNode)p0.nodeAt(sortNodeId0)).sortSpec();
+    final List<Expression> sortSpec1 = ((SortNode)p1.nodeAt(sortNodeId1)).sortSpec();
+
+    final String sortSpec0Str = sortSpec0.toString();
+    final String sortSpec1Str = sortSpec1.toString();
+
+    final List<String> sortSpec0Content = new ArrayList<>();
+    final List<String> sortSpec1Content = new ArrayList<>();
+
+    if (sortSpec0.size() != sortSpec1.size()) return false;
+
+    for (int i = 0; i < sortSpec0.size(); i++) {
+      final Expression sortSpec0Expr = sortSpec0.get(i);
+      final Expression sortSpec1Expr = sortSpec1.get(i);
+
+      if (sortSpec0Expr.colRefs().size() != 0) {
+        for (final SqlNode colRef : sortSpec0Expr.colRefs()) {
+          sortSpec0Content.add(colRef.$(ExprFields.ColRef_ColName).$(SqlNodeFields.ColName_Col).toLowerCase());
+        }
+      }
+
+      if (sortSpec1Expr.colRefs().size() != 0) {
+        for (final SqlNode colRef : sortSpec1Expr.colRefs()) {
+          sortSpec1Content.add(colRef.$(ExprFields.ColRef_ColName).$(SqlNodeFields.ColName_Col).toLowerCase());
+        }
+      }
+    }
 
     if(parent0 == NO_SUCH_NODE && parent1 == NO_SUCH_NODE){
-      return sortSpec1.equals(sortSpec0);
+      return sortSpec0Str.equals(sortSpec1Str);
     }
-    return sortSpec1.equals(sortSpec0) && new PlanEq(p0, p1).isSemanticEqForNodes(parent0, parent1);
+    return sortSpec0Str.equals(sortSpec1Str)
+            && sortSpec0Content.equals(sortSpec1Content)
+            && new PlanEq(p0, p1).isSemanticEqForNodes(parent0, parent1);
   }
 
   int findKindNode(PlanContext plan, int nodeId, PlanKind k) {
@@ -512,7 +552,7 @@ public class OrderbySupport {
           plan.myDeleteNode(nodeId);
         }
       }
-      else if (((SortNode) cur).indexedRefs().length == 0 ||
+      else if ((((SortNode) cur).indexedRefs().length == 0 && isOrderByConstant((SortNode) cur)) ||
               (plan.kindOf(plan.childOf(nodeId, 0)) == PlanKind.Proj && PlanSupport.stringifyNode(plan, nodeId).contains("null"))){
         int newRoot = plan.childOf(rootId, 0);
         plan.myDeleteNode(nodeId);

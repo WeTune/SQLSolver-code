@@ -1,10 +1,12 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.util.PrettyBuilder;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.Function;
 
 public class LianotImpl extends Liastar {
 
@@ -35,8 +37,15 @@ public class LianotImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    return "~(" + operand.toString() + ")";
+  protected void prettyPrint(PrettyBuilder builder) {
+    builder.print("~(").indent(2);
+    operand.prettyPrint(builder);
+    builder.indent(-2).print(")");
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return operand.isPrettyPrintMultiLine();
   }
 
   @Override
@@ -172,4 +181,16 @@ public class LianotImpl extends Liastar {
     }
     return this;
   }
+
+  @Override
+  public int embeddingLayers() {
+    return operand.embeddingLayers();
+  }
+
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    Liastar operand0 = operand.transformPostOrder(transformer);
+    return transformer.apply(mkNot(innerStar, operand0));
+  }
+
 }

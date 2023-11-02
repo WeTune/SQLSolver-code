@@ -4,17 +4,14 @@ import wtune.sql.ast.constants.ConstraintKind;
 import wtune.sql.schema.Column;
 import wtune.sql.schema.Constraint;
 import wtune.sql.schema.Table;
-import wtune.superopt.logic.CASTSupport;
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.SetMatching;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static wtune.common.utils.IterableSupport.any;
-import static wtune.superopt.uexpr.UExprSupport.getSchemaEqVarCongruence;
 import static wtune.superopt.uexpr.UExprSupport.transformTerms;
 import static wtune.superopt.logic.CASTSupport.schema;
 
@@ -90,11 +87,121 @@ final class UPredImpl implements UPred {
   }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    if (this.equals(baseTerm)) return repTerm.copy();
+    final List<UTerm> replaced = transformTerms(arguments, t -> t.replaceAtomicTermExcept(baseTerm, repTerm, exceptTerm));
+    return UPred.mk(predKind, predName, replaced);
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     if (this.equals(baseTerm)) return repTerm.copy();
     final List<UTerm> replaced = transformTerms(arguments, t -> t.replaceAtomicTerm(baseTerm, repTerm));
     return UPred.mk(predKind, predName, replaced);
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    printer.print("[");
+    printer.indent(1);
+    if (isUnaryPred()) {
+      // only one single arg
+      assert arguments.size() == 1;
+      printer.print(predName).print("(");
+      int indent = predName.toString().length() + 1;
+      printer.indent(indent);
+      arguments.get(0).prettyPrint(printer);
+      printer.print(")");
+      printer.indent(-indent);
+    } else {
+      assert arguments.size() == 2;
+      UTerm left = arguments.get(0), right = arguments.get(1);
+      boolean multiLineLeft = left.isPrettyPrintMultiLine();
+      boolean multiLineRight = right.isPrettyPrintMultiLine();
+      left.prettyPrint(printer);
+      if (multiLineLeft && multiLineRight) {
+        printer.println().println(predName);
+      } else if (multiLineLeft) {
+        printer.println().print(predName).print(" ");
+      } else if (multiLineRight) {
+        printer.print(" ").println(predName);
+      } else {
+        printer.print(" ").print(predName).print(" ");
+      }
+      right.prettyPrint(printer);
+    }
+    printer.print("]");
+    printer.indent(-1);
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    if (isUnaryPred()) {
+      assert arguments.size() == 1;
+      return arguments.get(0).isPrettyPrintMultiLine();
+    } else {
+      assert arguments.size() == 2;
+      return arguments.get(0).isPrettyPrintMultiLine()
+              || arguments.get(1).isPrettyPrintMultiLine();
+    }
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    if (isUnaryPred()) {
+      assert arguments.size() == 1;
+      return Objects.hash(arguments.get(0).hashForSort(varHash),
+              predKind);
+    } else {
+      assert arguments.size() == 2;
+      return Objects.hash(arguments.get(0).hashForSort(varHash),
+              arguments.get(1).hashForSort(varHash), predKind, predName);
+    }
+  }
+
+  @Override
+  public void sortCommAssocItems() {
+    for (UTerm term : arguments) {
+      term.sortCommAssocItems();
+    }
+    if (predKind == PredKind.EQ || predKind == PredKind.NEQ) {
+      arguments.sort(Comparator.comparingInt(UTerm::hashForSort));
+    }
+  }
+
+  @Override
+  public Set<String> getFVs() {
+    Set<String> fvs = arguments.get(0).getFVs();
+    if (!isUnaryPred()) fvs.addAll(arguments.get(1).getFVs());
+    return fvs;
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    if (that instanceof UPredImpl pred) {
+      if (arguments.size() != pred.arguments.size()
+              || predKind != pred.predKind
+              || !Objects.equals(predName, pred.predName))
+        return false;
+      if (isUnaryPred()) {
+        return arguments.get(0).groupSimilarVariables(pred.arguments.get(0), matching);
+      } else {
+        int hash1 = arguments.get(0).hashForSort();
+        int hash2 = arguments.get(1).hashForSort();
+        if ((pred.isPredKind(PredKind.EQ) || pred.isPredKind(PredKind.NEQ))
+                && hash1 == hash2) {
+          // symmetric predicate
+          return matching.match(getFVs(), that.getFVs());
+        } else {
+          return arguments.get(0).groupSimilarVariables(pred.arguments.get(0), matching)
+                  && arguments.get(1).groupSimilarVariables(pred.arguments.get(1), matching);
+        }
+      }
+    }
+    return false;
   }
 
   @Override
@@ -136,6 +243,8 @@ final class UPredImpl implements UPred {
       UTerm rhs = that.args().get(1);
       if(lhs instanceof UPred && rhs instanceof UConst && ((UConst) rhs).value() == 1)
         that = (UPred) lhs;
+      if(rhs instanceof UPred && lhs instanceof UConst && ((UConst) lhs).value() == 1)
+        that = (UPred) rhs;
     }
 
     if(predKind == PredKind.EQ) {
@@ -143,6 +252,8 @@ final class UPredImpl implements UPred {
       UTerm rhs = args().get(1);
       if(lhs instanceof UPred && rhs instanceof UConst && ((UConst) rhs).value() == 1)
         return lhs.equals(that);
+      if(rhs instanceof UPred && lhs instanceof UConst && ((UConst) lhs).value() == 1)
+        return rhs.equals(that);
     }
 
     if (predKind != that.predKind() || !predName.equals(that.predName())) return false;

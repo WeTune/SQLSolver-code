@@ -3,8 +3,10 @@ package wtune.superopt.liastar;
 import com.microsoft.z3.*;
 import wtune.superopt.logic.LogicSupport;
 import wtune.superopt.logic.SqlSolver;
+import wtune.superopt.util.PrettyBuilder;
 
 import java.util.*;
+import java.util.function.Function;
 
 import static wtune.common.utils.IterableSupport.all;import static wtune.common.utils.IterableSupport.any;
 
@@ -69,15 +71,28 @@ public class LiasumImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    String result = "(";
-    for(String s : outerVector)
-      result = result + s + ",";
-    result = result + ") in { (";
-    for(String s : innerVector)
-      result = result + s + ",";
-    result = result + ") | ";
-    return result + constraints.toString() + " }*";
+  protected void prettyPrint(PrettyBuilder builder) {
+    builder.print("(");
+    for (int i = 0, bound = outerVector.size(); i < bound; i++) {
+      builder.print(outerVector.get(i));
+      if (i < bound - 1) builder.print(", ");
+    }
+    builder.println(") ∈");
+    builder.print("{(");
+    for (int i = 0, bound = innerVector.size(); i < bound; i++) {
+      builder.print(innerVector.get(i));
+      if (i < bound - 1) builder.print(", ");
+    }
+    builder.print(") | ");
+    builder.indent(4).println();
+    constraints.prettyPrint(builder);
+    builder.indent(-4).println();
+    builder.print("}*");
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return true;
   }
 
   @Override
@@ -1151,6 +1166,21 @@ public class LiasumImpl extends Liastar {
   @Override
   public Liastar subformulaWithoutStar() {
     return Liastar.mkEq(false, Liastar.mkConst(false, 0), Liastar.mkConst(false, 0));
+  }
+
+  @Override
+  public int embeddingLayers() {
+    return constraints.embeddingLayers() + 1;
+  }
+
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    Liastar constraints0 = constraints.transformPostOrder(transformer);
+    return transformer.apply(mkSum(
+            innerStar,
+            new ArrayList<>(outerVector),
+            new ArrayList<>(innerVector),
+            constraints0));
   }
 
 }

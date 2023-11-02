@@ -1,10 +1,12 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.util.PrettyBuilder;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.Function;
 
 public class LiaorImpl extends Liastar {
 
@@ -54,8 +56,17 @@ public class LiaorImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    return "(" + operand1.toString() + "\\/" + operand2.toString() + ")";
+  protected void prettyPrint(PrettyBuilder builder) {
+    boolean needsParen1 = (operand1 instanceof LiaandImpl);
+    boolean needsParen2 = (operand2 instanceof LiaandImpl);
+    prettyPrintBinaryOp(builder, operand1, operand2,
+            needsParen1, needsParen2, " \\/ ");
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return operand1.isPrettyPrintMultiLine()
+            || operand2.isPrettyPrintMultiLine();
   }
 
   @Override
@@ -181,6 +192,20 @@ public class LiaorImpl extends Liastar {
     operand1 = operand1.subformulaWithoutStar();
     operand2 = operand2.subformulaWithoutStar();
     return this;
+  }
+
+  @Override
+  public int embeddingLayers() {
+    int leftLayer = operand1.embeddingLayers();
+    int rightLayer = operand2.embeddingLayers();
+    return (leftLayer > rightLayer) ? leftLayer : rightLayer;
+  }
+
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    Liastar operand10 = operand1.transformPostOrder(transformer);
+    Liastar operand20 = operand2.transformPostOrder(transformer);
+    return transformer.apply(mkOr(innerStar, operand10, operand20));
   }
 
 }

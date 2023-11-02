@@ -1,8 +1,10 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.util.PrettyBuilder;
 
 import java.util.*;
+import java.util.function.Function;
 
 public class LiaiteImpl extends Liastar {
 
@@ -26,8 +28,33 @@ public class LiaiteImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    return "ite(" + cond.toString() + ", " + operand1.toString() + ", " + operand2.toString() + ")";
+  protected void prettyPrint(PrettyBuilder builder) {
+    builder.print("ite(").indent(4);
+
+    boolean multiLine = cond.isPrettyPrintMultiLine();
+    cond.prettyPrint(builder);
+    builder.print(", ");
+    if (multiLine) builder.println();
+
+    multiLine = operand1.isPrettyPrintMultiLine();
+    if (multiLine) builder.println();
+    operand1.prettyPrint(builder);
+    builder.print(", ");
+    if (multiLine) builder.println();
+
+    multiLine = operand2.isPrettyPrintMultiLine();
+    if (multiLine) builder.println();
+    operand2.prettyPrint(builder);
+    if (multiLine) builder.println();
+
+    builder.indent(-4).print(")");
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return cond.isPrettyPrintMultiLine()
+            || operand1.isPrettyPrintMultiLine()
+            || operand2.isPrettyPrintMultiLine();
   }
 
   @Override
@@ -234,5 +261,19 @@ public class LiaiteImpl extends Liastar {
     }
     return this;
   }
+
+  @Override
+  public int embeddingLayers() {
+    return cond.embeddingLayers();
+  }
+
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    Liastar cond0 = cond.transformPostOrder(transformer);
+    Liastar operand10 = operand1.transformPostOrder(transformer);
+    Liastar operand20 = operand2.transformPostOrder(transformer);
+    return transformer.apply(mkIte(innerStar, cond0, operand10, operand20));
+  }
+
 }
 

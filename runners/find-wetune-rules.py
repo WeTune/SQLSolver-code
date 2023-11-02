@@ -1,9 +1,6 @@
 #!/usr/bin/python3
 import os
-import json
 import argparse
-
-import numpy as np
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

@@ -2,15 +2,15 @@ package wtune.superopt.uexpr;
 
 import wtune.common.utils.ListSupport;
 import wtune.superopt.liastar.Liastar;
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.SetMatching;
 
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 import static wtune.common.utils.Commons.joining;
 
-record USumImpl(Set<UVar> boundedVars, UTerm body) implements USum {
+public record USumImpl(Set<UVar> boundedVars, UTerm body) implements USum {
+
   @Override
   public boolean isUsing(UVar var) {
     if (!var.is(UVar.VarKind.BASE)) return false;
@@ -79,6 +79,17 @@ record USumImpl(Set<UVar> boundedVars, UTerm body) implements USum {
   }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    final UTerm replaced = body.replaceAtomicTermExcept(baseTerm, repTerm, exceptTerm);
+    final Set<UVar> newBoundedVars = new HashSet<>(boundedVars);
+    final USum newSum = USum.mk(newBoundedVars, replaced);
+    newSum.removeUnusedBoundedVar();
+    return newSum;
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     final UTerm replaced = body.replaceAtomicTerm(baseTerm, repTerm);
@@ -86,6 +97,59 @@ record USumImpl(Set<UVar> boundedVars, UTerm body) implements USum {
     final USum newSum = USum.mk(newBoundedVars, replaced);
     newSum.removeUnusedBoundedVar();
     return newSum;
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    final StringBuilder builder = new StringBuilder("\u2211");
+    final List<String> vars = ListSupport.map(boundedVars, UVar::toString);
+    vars.sort(String::compareTo);
+    joining("{", ",", "}(", false, vars, builder);
+
+    String prefix = builder.toString();
+    printer.print(prefix);
+
+    int indent = prefix.length();
+    printer.indent(indent);
+    body.prettyPrint(printer);
+    printer.indent(-indent);
+    printer.print(')');
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    return body.isPrettyPrintMultiLine();
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    int[] hashes = new int[2];
+    hashes[0] = ("USum{" + boundedVars.size() + "}").hashCode();
+    hashes[1] = body().hashForSort(varHash);
+    return Arrays.hashCode(hashes);
+  }
+
+  @Override
+  public void sortCommAssocItems() {
+    body.sortCommAssocItems();
+  }
+
+  @Override
+  public Set<String> getFVs() {
+    Set<String> fvs = body.getFVs();
+    for (UVar var : boundedVars) {
+      fvs.remove(var.toString());
+    }
+    return fvs;
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    if (that instanceof USum sum) {
+      if (boundedVars.size() != sum.boundedVars().size()) return false;
+      return body.groupSimilarVariables(sum.body(), matching);
+    }
+    return false;
   }
 
   public UTerm replaceTerm(UTerm baseTerm, UTerm repTerm) {
@@ -162,14 +226,88 @@ record USumImpl(Set<UVar> boundedVars, UTerm body) implements USum {
   }
 
   @Override
+  public Set<String> getBoundVarNames() {
+    Set<String> names = new HashSet<>();
+    for (UVar var : boundedVars) {
+      names.add(var.toString());
+    }
+    return names;
+  }
+
+  private static Set<UVar> strings2Vars(Set<String> names) {
+    Set<UVar> vars = new HashSet<>();
+    for (String name : names) {
+      vars.add(UVar.mkBase(UName.mk(name)));
+    }
+    return vars;
+  }
+
+  private static SetMatching<UVar> strings2BoundVars(SetMatching<String> matching, Set<String> leftBoundVarNames, Set<String> rightBoundVarNames) {
+    SetMatching<UVar> varMatching = new SetMatching<>();
+    for (Set<String>[] pair : matching) {
+      Set<String> lnames = new HashSet<>(pair[0]);
+      Set<String> rnames = new HashSet<>(pair[1]);
+      // eliminate non-bound variables
+      lnames.retainAll(leftBoundVarNames);
+      rnames.retainAll(rightBoundVarNames);
+      // convert to UVar
+      Set<UVar> s1 = strings2Vars(lnames), s2 = strings2Vars(rnames);
+      if (!varMatching.match(s1, s2)) return null;
+    }
+    return varMatching;
+  }
+
+  // match s1[depth] with elements in s2
+  private static boolean tryMatchInPair(int depth, SetMatching<UVar> matching, UTerm t1, UTerm t2,
+                                        int depthInPair, List<UVar> s1, Set<UVar> s2) {
+    if (depthInPair == s1.size()) return tryMatch(depth + 1, matching, t1, t2);
+    final UVar curVar = s1.get(depthInPair);
+    final UVar newVar = UVar.mkBase(UName.mk(Liastar.newVarName()));
+    t1 = t1.replaceVar(curVar, newVar, true);
+    for (UVar v2 : s2) {
+      Set<UVar> tmps2 = new HashSet<>(s2);
+      tmps2.remove(v2);
+      final UTerm tmpt2 = t2.replaceVar(v2, newVar, true);
+      if (tryMatchInPair(depth, matching, t1, tmpt2, depthInPair + 1, s1, tmps2))
+        return true;
+    }
+    return false;
+  }
+
+  private static boolean tryMatch(int depth, SetMatching<UVar> matching, UTerm t1, UTerm t2) {
+    // border of search
+    if (depth == matching.size()) return t1.equals(t2);
+    // search for different matching within matching[depth]
+    Set<UVar>[] pair = matching.get(depth);
+    return tryMatchInPair(depth, matching, t1, t2, 0,
+            new ArrayList<>(pair[0]), pair[1]);
+  }
+
+  private static boolean fastEquals(USum sum1, USum sum2) {
+    sum1 = (USum) sum1.copy();
+    sum2 = (USum) sum2.copy();
+    sum1.sortCommAssocItems();
+    sum2.sortCommAssocItems();
+    // match variables in groups
+    SetMatching<String> matching = new SetMatching<>();
+    if (!sum1.body().groupSimilarVariables(sum2.body(), matching)) return false;
+    // enumerate matching
+    SetMatching<UVar> varMatching = strings2BoundVars(matching, sum1.getBoundVarNames(), sum2.getBoundVarNames());
+    if (varMatching == null) return false;
+    return tryMatch(0, varMatching, sum1.body().copy(), sum2.body().copy());
+  }
+
+  @Override
   public boolean equals(Object obj) {
     if (this == obj) return true;
-    if (!(obj instanceof USum)) return false;
-    final USum that = (USum) obj;
-    UTerm thatBody = that.body().copy();
+    if (!(obj instanceof final USum that)) return false;
     HashSet<UVar> thatBoundVars = new HashSet<>(that.boundedVars());
 
     if (boundedVars.size() != thatBoundVars.size()) return false;
+
+    if (boundedVars.size() > 4) return fastEquals(this, that);
+
+    UTerm thatBody = that.body().copy();
     if (boundedVars.equals(thatBoundVars) && body.equals(thatBody)) return true;
 
     return checkSameSum(0, new ArrayList<>(boundedVars), body.copy(), thatBoundVars, thatBody);

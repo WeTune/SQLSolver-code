@@ -4,7 +4,6 @@ import com.microsoft.z3.Context;
 import com.microsoft.z3.Global;
 import wtune.sql.plan.PlanContext;
 import wtune.sql.plan.PlanKind;
-import wtune.sql.schema.Schema;
 import wtune.superopt.fragment.Agg;
 import wtune.superopt.fragment.AggFuncKind;
 import wtune.superopt.fragment.Symbol;
@@ -13,7 +12,7 @@ import wtune.superopt.substitution.Substitution;
 import wtune.superopt.substitution.SubstitutionSupport;
 import wtune.superopt.substitution.SubstitutionTranslatorResult;
 import wtune.superopt.uexpr.*;
-import wtune.superopt.uexpr.normalizar.QueryUExprICRewriter;
+import wtune.superopt.uexpr.normalizer.QueryUExprICRewriter;
 
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -229,12 +228,15 @@ public abstract class LogicSupport {
     return LogicSupport.EQ;
   }
 
-  private static int proveEqByLIAStarSelectedIC(PlanContext p0, PlanContext p1) {
+  private static int proveEqByLIAStarSelectedIC(PlanContext p0, PlanContext p1,
+                                                int extraFlags) {
     int selectedIC = 0;
     do {
       QueryUExprICRewriter.selectIC(selectedIC);
       final UExprConcreteTranslationResult uExprsWithICRewrite =
-          UExprSupport.translateQueryToUExpr(p0, p1, UExprSupport.UEXPR_FLAG_INTEGRITY_CONSTRAINT_REWRITE);
+          UExprSupport.translateQueryToUExpr(p0, p1,
+                  UExprSupport.UEXPR_FLAG_INTEGRITY_CONSTRAINT_REWRITE
+                          | extraFlags);
       if (uExprsWithICRewrite != null) {
         final int res1 = LogicSupport.proveEqByLIAStar(uExprsWithICRewrite);
         if (res1 == EQ) {
@@ -248,6 +250,34 @@ public abstract class LogicSupport {
     return NEQ;
   }
 
+  private static int proveEqByLIAStarConcreteNoSortWithIC(PlanContext p0, PlanContext p1, int extraFlags) {
+    final UExprConcreteTranslationResult uExprsWithIC =
+            UExprSupport.translateQueryToUExpr(p0, p1,
+                    UExprSupport.UEXPR_FLAG_INTEGRITY_CONSTRAINT_REWRITE
+                            | extraFlags);
+    if (uExprsWithIC != null) {
+      final int res1 = LogicSupport.proveEqByLIAStar(uExprsWithIC);
+      if (res1 == EQ) return EQ;
+      if (proveEqByLIAStarSelectedIC(p0, p1, extraFlags) == EQ) return EQ;
+    }
+    return (uExprsWithIC == null) ? UNKNOWN : NEQ;
+  }
+
+  private static int proveEqByLIAStarConcreteNoSort(PlanContext p0, PlanContext p1) {
+    int resICUnexplainedPred = proveEqByLIAStarConcreteNoSortWithIC(p0, p1,
+            UExprSupport.UEXPR_FLAG_NO_EXPLAIN_PREDICATES);
+    if (resICUnexplainedPred == EQ) return EQ;
+    int resIC = proveEqByLIAStarConcreteNoSortWithIC(p0, p1, 0);
+    if (resIC == EQ) return EQ;
+    final UExprConcreteTranslationResult uExprs = UExprSupport.translateQueryToUExpr(p0, p1, 0);
+    if (uExprs != null) {
+      final int res0 = LogicSupport.proveEqByLIAStar(uExprs);
+      if (res0 == EQ) return EQ;
+    }
+    return (resICUnexplainedPred == UNKNOWN && resIC == UNKNOWN) ?
+            UNKNOWN : NEQ;
+  }
+
   public static int proveEqByLIAStarConcrete(PlanContext p0, PlanContext p1) {
 //    System.out.println("Proving\n" + p0 + "\n" + p1);
     if (!CASTSupport.castHandler(p0, p1)) {
@@ -255,22 +285,13 @@ public abstract class LogicSupport {
     }
 
     if (!hasNodeOfKind(p0, PlanKind.Sort) && !hasNodeOfKind(p1, PlanKind.Sort) ) {
-      final UExprConcreteTranslationResult uExprsWithICRewrite =
-          UExprSupport.translateQueryToUExpr(p0, p1, UExprSupport.UEXPR_FLAG_INTEGRITY_CONSTRAINT_REWRITE);
-      if (uExprsWithICRewrite != null) {
-        final int res1 = LogicSupport.proveEqByLIAStar(uExprsWithICRewrite);
-        if (res1 == EQ) return res1;
-        if (proveEqByLIAStarSelectedIC(p0, p1) == EQ) return EQ;
-      }
-      final UExprConcreteTranslationResult uExprs = UExprSupport.translateQueryToUExpr(p0, p1, 0);
-      if (uExprs != null) {
-        final int res0 = LogicSupport.proveEqByLIAStar(uExprs);
-        if (res0 == EQ) return res0;
-      }
-      return (uExprsWithICRewrite == null) ? UNKNOWN : NEQ;
+      return proveEqByLIAStarConcreteNoSort(p0, p1);
     }
     HashSet<SubstitutionTranslatorResult> results = OrderbySupport.sortHandler(p0, p1);
-    if (results == null) return UNKNOWN;
+    if (results == null) {
+      //System.err.println("Complex Order By not support");
+      return UNKNOWN;
+    }
 
     for (SubstitutionTranslatorResult res : results) {
       int verifyResult = proveEqByLIAStarConcrete(res.src, res.tgt);

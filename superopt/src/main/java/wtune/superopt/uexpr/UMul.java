@@ -36,4 +36,6 @@ public interface UMul extends UTerm {
   public UTerm replaceTerm(UTerm baseTerm, UTerm repTerm);
 
   public void addFactor(UTerm term);
+
+  public boolean weakEquals(Object obj);
 }

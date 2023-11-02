@@ -1,5 +1,12 @@
 package wtune.superopt.uexpr;
 
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.SetMatching;
+
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+
 final class UConstImpl implements UConst {
 
   private final int value;
@@ -32,10 +39,46 @@ final class UConstImpl implements UConst {
   }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    if (this.equals(baseTerm)) return repTerm.copy();
+    return this.copy();
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     if (this.equals(baseTerm)) return repTerm.copy();
     return this.copy();
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    printer.print(value);
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    return false;
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    return Integer.hashCode(value);
+  }
+
+  @Override
+  public void sortCommAssocItems() {}
+
+  @Override
+  public Set<String> getFVs() {
+    return new HashSet<>();
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    return true;
   }
 
   @Override

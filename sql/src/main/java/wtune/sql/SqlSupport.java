@@ -7,7 +7,7 @@ import wtune.sql.ast.constants.*;
 import wtune.sql.parser.AstParser;
 import wtune.sql.preprocess.CastHandler;
 import wtune.sql.preprocess.SemiAntiJoinHandler;
-import wtune.sql.preprocess.SqlNodeCoPreprocess;
+import wtune.sql.copreprocess.SqlNodeCoPreprocess;
 import wtune.sql.preprocess.SqlNodePreprocess;
 import wtune.sql.util.SqlCopier;
 import wtune.sql.ast.*;

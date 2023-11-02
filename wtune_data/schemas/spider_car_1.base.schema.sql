@@ -41,6 +41,6 @@ Edispl REAL,
 Horsepower VARCHAR(255),
 Weight INT,
 Accelerate REAL,
-Yearr INT,
+Year INT,
 FOREIGN KEY (Id) REFERENCES car_names (MakeId)
 );

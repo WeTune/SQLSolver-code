@@ -58,6 +58,7 @@ public abstract class RecursiveRewriter extends SqlNodePreprocess {
   }
 
   public SqlNode preprocess0(SqlNode node) {
+    if (node == null) return null;
     // current-level replacement
     SqlNode newExpr = handleNode(node);
     if (newExpr != node && !allowsMultipleApplications) {

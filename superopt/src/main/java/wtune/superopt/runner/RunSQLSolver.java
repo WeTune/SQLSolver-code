@@ -4,7 +4,7 @@ import wtune.common.utils.Args;
 import wtune.sql.SqlSupport;
 import wtune.sql.ast.SqlNode;
 import wtune.sql.plan.PlanContext;
-import wtune.sql.preprocess.CastHandler;
+import wtune.sql.preprocess.SqlNodePreprocess;
 import wtune.sql.schema.Schema;
 import wtune.sql.support.action.NormalizationSupport;
 import wtune.stmt.App;
@@ -13,7 +13,7 @@ import wtune.superopt.logic.LogicSupport;
 import wtune.superopt.logic.SqlSolver;
 import wtune.superopt.uexpr.UExprConcreteTranslationResult;
 import wtune.superopt.uexpr.UExprSupport;
-import wtune.superopt.uexpr.normalizar.QueryUExprICRewriter;
+import wtune.superopt.uexpr.normalizer.QueryUExprICRewriter;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,14 +25,16 @@ import static wtune.sql.plan.PlanSupport.*;
 import static wtune.superopt.logic.LogicSupport.*;
 
 public class RunSQLSolver implements Runner {
+
   private static final String CALCITE_APP_NAME = "calcite_test";
 
-  private String appName;
+  private Path out;
   private Path testCases;
   private int targetPairId;
   private List<Integer> skipPairIds;
   private int rounds = 5;
   private boolean time, tsvNeq;
+  private App app;
 
   private Path tsvFilePath, outPath;
   private StringBuilder tsvStrBuilder, outStrBuilder;
@@ -46,7 +48,6 @@ public class RunSQLSolver implements Runner {
   @Override
   public void prepare(String[] argStrings) {
     final Args args = Args.parse(argStrings, 1);
-    appName = args.getOptional("app", String.class, CALCITE_APP_NAME);
     time = args.getOptional("time", boolean.class, false);
     String tsvFilename = args.getOptional("tsv", String.class, "tmp_result.tsv");
     tsvFilePath = Path.of(tsvFilename);
@@ -58,6 +59,8 @@ public class RunSQLSolver implements Runner {
 
     if (!Files.exists(testCases)) throw new IllegalArgumentException("no such file: " + testCases);
 
+    String appName = args.getOptional("app", String.class, CALCITE_APP_NAME);
+    app = App.of(appName);
     targetPairId = args.getOptional("target", Integer.class, -1);
     String skipStr = args.getOptional("skip", String.class, "");
     skipPairIds = Arrays.stream(skipStr.split(","))
@@ -121,6 +124,9 @@ public class RunSQLSolver implements Runner {
         return 0;
       }
     }
+    if (isSemanticError(pair.p0, pair.p1)) {
+      return 1;
+    }
     // case: totally the same
     if (isLiteralEq(pair.p0, pair.p1)) {
       return 1;
@@ -130,11 +136,6 @@ public class RunSQLSolver implements Runner {
 
     final String res1 = getCalciteVerifyResultConcrete(pair, verbose);
     if (res1.equals("EQ")) {
-      return 1;
-    }
-
-    final String res0 = getCalciteVerifyResultSymbolic(pair, verbose);
-    if (res0.equals("EQ")) {
       return 1;
     }
 
@@ -263,9 +264,8 @@ public class RunSQLSolver implements Runner {
   }
 
   private List<QueryPair> readPairs(List<String> lines) {
-    final App app = App.of(appName);
     final Schema schema = app.schema("base");
-    CastHandler.setSchema(schema);
+    SqlNodePreprocess.setSchema(schema);
     CASTSupport.setSchema(schema);
     SqlSupport.muteParsingError();
 
@@ -293,16 +293,16 @@ public class RunSQLSolver implements Runner {
       final PlanContext p0 = assemblePlan(q0, schema);
       if (p0 == null) {
         final int ruleId = (i + 1) + 1 >> 1;
-        System.err.printf("Rule id: %d has wrong query at line %d \n", ruleId, i + 1);
-        System.err.println(getLastError());
+        //System.err.printf("Rule id: %d has wrong query at line %d \n", ruleId, i + 1);
+        //System.err.println(getLastError());
         pairs.add(new QueryPair(i + 1, schema, sql0, sql1, q0, q1));
         continue;
       }
       final PlanContext p1 = assemblePlan(q1, schema);
       if (p1 == null) {
         final int ruleId = (i + 1) + 1 >> 1;
-        System.err.printf("Rule id: %d has wrong query at line %d \n", ruleId, i + 2);
-        System.err.println(getLastError());
+        //System.err.printf("Rule id: %d has wrong query at line %d \n", ruleId, i + 2);
+        //System.err.println(getLastError());
         pairs.add(new QueryPair(i + 1, schema, sql0, sql1, q0, q1));
         continue;
       }
@@ -333,22 +333,4 @@ public class RunSQLSolver implements Runner {
     }
   }
 
-  private String getCalciteVerifyResultSymbolic(QueryPair pair, boolean verbose) {
-    int res0, res1;
-    try {
-      res0 = LogicSupport.proveEqByLIAStarSymbolic(pair.p0, pair.p1);
-    } catch (Throwable ex) {
-      if (verbose) ex.printStackTrace();
-      res0 = UNKNOWN;
-    }
-
-    if (res0 == EQ) return LogicSupport.stringifyResult(res0);
-    try {
-      res1 = LogicSupport.proveEqByLIAStarSymbolic(pair.p1, pair.p0);
-    } catch (Throwable ex) {
-      if (verbose) ex.printStackTrace();
-      res1 = UNKNOWN;
-    }
-    return res1 == EQ ? "EQ" : "NEQ";//LogicSupport.stringifyResult(EQ) : LogicSupport.stringifyResult(NEQ);
-  }
 }

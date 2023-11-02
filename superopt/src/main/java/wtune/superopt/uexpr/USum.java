@@ -34,4 +34,7 @@ public interface USum extends UUnary {
   public UTerm addMulSubTerm(UTerm newTerm);
 
   public boolean addBoundedVarForce(UVar var);
+
+  Set<String> getBoundVarNames();
+
 }

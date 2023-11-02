@@ -4,15 +4,22 @@ import com.microsoft.z3.Context;
 import com.microsoft.z3.Expr;
 import com.microsoft.z3.IntExpr;
 import com.microsoft.z3.Solver;
+import wtune.superopt.util.PrettyBuilder;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Function;
 
 public class LiavarImpl extends Liastar {
 
   public String varName;
+
+  @Override
+  public int embeddingLayers() {
+    return 0;
+  }
 
   @Override
   public Set<String> collectVarSet() {
@@ -45,8 +52,13 @@ public class LiavarImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    return varName;
+  protected void prettyPrint(PrettyBuilder builder) {
+    builder.print(varName);
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return false;
   }
 
   @Override
@@ -116,5 +128,10 @@ public class LiavarImpl extends Liastar {
   @Override
   public Expr expandStarWithK(Context ctx, Solver sol, String suffix) {
     return ctx.mkIntConst(varName + suffix);
+  }
+
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    return transformer.apply(mkVar(innerStar, varName));
   }
 }

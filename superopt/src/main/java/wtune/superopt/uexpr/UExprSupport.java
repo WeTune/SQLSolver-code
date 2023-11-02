@@ -9,8 +9,9 @@ import wtune.sql.plan.PlanContext;
 import wtune.sql.schema.Schema;
 import wtune.superopt.substitution.Substitution;
 import wtune.superopt.substitution.SubstitutionTranslatorResult;
-import wtune.superopt.uexpr.normalizar.UNormalization;
-import wtune.superopt.uexpr.normalizar.UNormalizationEnhance;
+import wtune.superopt.uexpr.normalizer.UExprPreprocessor;
+import wtune.superopt.uexpr.normalizer.UNormalization;
+import wtune.superopt.uexpr.normalizer.UNormalizationEnhance;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,12 +26,24 @@ import static wtune.superopt.uexpr.UKind.*;
 import static wtune.superopt.uexpr.UName.NAME_IS_NULL;
 
 public abstract class UExprSupport {
-  public static final int UEXPR_FLAG_SUPPORT_DEPENDENT_SUBQUERY = 1;
-  public static final int UEXPR_FLAG_CHECK_SCHEMA_FEASIBLE = 2;
 
-  public static final int UEXPR_FLAG_INTEGRITY_CONSTRAINT_REWRITE = 4;
+  // Used flag bits (the most significant bit is on the left):
+  // (31-24) _ _ _ _ _ _ _ _
+  // (23-16) _ _ _ _ _ _ _ _
+  // (15-08) _ _ _ _ _ _ _ _
+  // (07-01) _ _ _ x x x x x
+  // ("_" are unused, while "x" are used)
+
+  public static final int UEXPR_FLAG_SUPPORT_DEPENDENT_SUBQUERY = 1;
+  public static final int UEXPR_FLAG_CHECK_SCHEMA_FEASIBLE = 1 << 1;
+
+  public static final int UEXPR_FLAG_INTEGRITY_CONSTRAINT_REWRITE = 1 << 2;
+
   // Below are used for concrete plan -> template translation issues
-  public static final int UEXPR_FLAG_VERIFY_CONCRETE_PLAN = 8;
+  public static final int UEXPR_FLAG_VERIFY_CONCRETE_PLAN = 1 << 3;
+
+  // decide how to translate predicates like "x IN (a, b, ...)"
+  public static final int UEXPR_FLAG_NO_EXPLAIN_PREDICATES = 1 << 4;
 
   private UExprSupport() {}
 
@@ -46,6 +59,19 @@ public abstract class UExprSupport {
     final UTerm copy = expr.copy();
     final UTerm reduced = copy.replaceAtomicTerm(subTerm, UConst.zero());
     return UExprSupport.normalizeExpr(reduced).equals(UConst.ZERO);
+  }
+
+  public static boolean usesTableVar(UTerm expr, String tableName, UVar var) {
+    if (expr instanceof UTable table) {
+      return table.tableName().toString().equals(tableName)
+              && table.var().equals(var);
+    } else {
+      // recursion
+      for (UTerm term : expr.subTerms()) {
+        if (usesTableVar(term, tableName, var)) return true;
+      }
+      return false;
+    }
   }
 
   @Deprecated
@@ -354,6 +380,20 @@ public abstract class UExprSupport {
     return ((UVarTerm) nullArg).var();
   }
 
+  public static boolean isPredOfVarStringArg(UPred pred) {
+    // check whether arguments of this pred are UVarTerms
+    // i.e. check whether this pred only takes tuple Vars as input
+    final List<UTerm> args = pred.args();
+    return all(args, arg -> arg.kind().isVarTerm() || arg.kind() == STRING);
+  }
+
+  public static boolean isPredOfVarConstArg(UPred pred) {
+    // check whether arguments of this pred are UVarTerms
+    // i.e. check whether this pred only takes tuple Vars as input
+    final List<UTerm> args = pred.args();
+    return all(args, arg -> arg.kind().isVarTerm() || arg.kind() == CONST);
+  }
+
   public static boolean isPredOfVarArg(UPred pred) {
     // check whether arguments of this pred are UVarTerms
     // i.e. check whether this pred only takes tuple Vars as input
@@ -385,6 +425,49 @@ public abstract class UExprSupport {
         assert eqPredVars.size() == 2;
         final UVar varArg0 = eqPredVars.get(0), varArg1 = eqPredVars.get(1);
         varEqClass.putCongruent(varArg0, varArg1);
+      }
+    }
+    return varEqClass;
+  }
+
+  /** Get equivalent UVars/UStrings in a UMul's sub-terms
+   *  e.g. `[a0(t0) = a1(t1)]` -> eq class {`a0(t0)`, `a1(t1)`}
+   *  e.g. `[a0(t0) = 'a']` -> eq class {`a0(t0)`, 'a'}
+   * */
+  public static NaturalCongruence<UTerm> getEqVarStringCongruenceInTermsOfMul(UTerm mulContext) {
+    return getEqCongruenceInTermsOfMul(mulContext, UExprSupport::isPredOfVarStringArg);
+  }
+
+  /** Get equivalent UVars/UConsts in a UMul's sub-terms
+   *  e.g. `[a0(t0) = a1(t1)]` -> eq class {`a0(t0)`, `a1(t1)`}
+   *  e.g. `[a0(t0) = 10]` -> eq class {`a0(t0)`, 10}
+   * */
+  public static NaturalCongruence<UTerm> getEqVarConstCongruenceInTermsOfMul(UTerm mulContext) {
+    return getEqCongruenceInTermsOfMul(mulContext, UExprSupport::isPredOfVarConstArg);
+  }
+
+  /** Get equivalent UVars/UConsts in a UMul's sub-terms
+   *  e.g. `[a0(t0) = a1(t1)]` -> eq class {`a0(t0)`, `a1(t1)`}
+   *  e.g. `[a0(t0) = 10]` -> eq class {`a0(t0)`, 10}
+   *  NOTE: this function only consider critical value for ctx!
+   * */
+  public static NaturalCongruence<UTerm> getEqVarConstCongruenceInTermsOfMulCritical(UTerm mulContext, UTerm ctx) {
+    return getEqCongruenceInTermsOfMul(mulContext, pred -> isPredOfVarConstArg(pred) && isCriticalValue(pred, ctx));
+  }
+
+  /** Get equivalent UTerms in a UMul's sub-terms based on EQ predicates.
+   *  The specified filter ignores sub-terms that make it return false.
+   * */
+  public static NaturalCongruence<UTerm> getEqCongruenceInTermsOfMul(UTerm mulContext, Function<UPred, Boolean> filter) {
+    assert mulContext.kind() == MULTIPLY;
+    final NaturalCongruence<UTerm> varEqClass = NaturalCongruence.mk();
+    for (UTerm subTerm : mulContext.subTermsOfKind(PRED)) {
+      final UPred pred = (UPred) subTerm;
+      if (pred.isPredKind(UPred.PredKind.EQ) && filter.apply(pred)) {
+        final List<UTerm> eqPredTerms = pred.args();
+        assert eqPredTerms.size() == 2;
+        final UTerm termArg0 = eqPredTerms.get(0), termArg1 = eqPredTerms.get(1);
+        varEqClass.putCongruent(termArg0, termArg1);
       }
     }
     return varEqClass;
@@ -434,6 +517,11 @@ public abstract class UExprSupport {
       }
     }
     for (UTerm subTerm : expr.subTerms()) getSchemaEqVarCongruence0(subTerm, varEqClass);
+  }
+
+  /** Reason about pre-defined functions (e.g. like_op) */
+  public static UTerm preprocessExpr(UTerm expr) {
+    return new UExprPreprocessor().preprocess(expr);
   }
 
   /**

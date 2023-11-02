@@ -49,7 +49,7 @@ public class Liasolver {
   String checkUnderapp() {
     try {
       Liastar curexp = liaFormula.deepcopy();
-      curexp = expandStarWithUnderapp(curexp, 2);
+      curexp = calculateUnderApprox(curexp, curexp.embeddingLayers() > 4 ? 1 : 2);
       return solveLia(curexp);
     } catch (Exception e) {
       return "UNKNOWN";
@@ -99,6 +99,57 @@ public class Liasolver {
     }
   }
 
+  /** forall t1 t2. ((isnull(t1)<>0) /\ (isnull(t2)<>0)) -> t1 = t2 */
+  private BoolExpr ruleNullEquals(Context ctx) {
+    String strVar1 = "t1", strVar2 = "t2", strIsNull = "IsNull";
+    Expr[] vars = new Expr[2];
+    vars[0] = ctx.mkIntConst(strVar1);
+    vars[1] = ctx.mkIntConst(strVar2);
+
+    final Sort I = ctx.getIntSort();
+    final FuncDecl func = ctx.mkFuncDecl(strIsNull, I, I);
+    Expr isNull1 = ctx.mkApp(func, vars[0]);
+    Expr isNull2 = ctx.mkApp(func, vars[1]);
+    BoolExpr notNull1 = ctx.mkNot(ctx.mkEq(isNull1, ctx.mkInt(0)));
+    BoolExpr notNull2 = ctx.mkNot(ctx.mkEq(isNull2, ctx.mkInt(0)));
+    BoolExpr eq = ctx.mkEq(vars[0], vars[1]);
+
+    Expr body = ctx.mkImplies(ctx.mkAnd(notNull1, notNull2), eq);
+    return ctx.mkForall(vars, body, 1, null, null, null, null);
+  }
+
+  private BoolExpr appendRules(Context ctx, BoolExpr target) {
+    target = ctx.mkAnd(ruleNullEquals(ctx), target);
+    return target;
+  }
+
+  private Set<BoolExpr> getMultipleConditions(Context ctx, Expr expr) {
+    Set<BoolExpr> conditions = new HashSet<>();
+    if (!expr.isApp()) return conditions;
+
+    Expr[] args = expr.getArgs();
+    if (expr.isIDiv()
+            && args[0] instanceof IntExpr i0
+            && args[1] instanceof IntExpr i1) {
+      conditions.add(ctx.mkEq(ctx.mkMod(i0, i1), ctx.mkInt(0)));
+    }
+    // recursion
+    for (Expr sub : args) {
+      conditions.addAll(getMultipleConditions(ctx, sub));
+    }
+    return conditions;
+  }
+
+  // upon occurrence of "div u1 u2": append "= (mod u1 u2) 0"
+  // this restricts valid division between integers
+  private BoolExpr appendMultipleConditions(Context ctx, BoolExpr target) {
+    Set<BoolExpr> conditions = getMultipleConditions(ctx, target);
+    for (BoolExpr condition : conditions) {
+      target = ctx.mkAnd(condition, target);
+    }
+    return target;
+  }
+
   String solveLia(Liastar f) {
     try (final Context ctx = new Context()) {
       BoolExpr target = ctx.mkTrue();
@@ -111,7 +162,16 @@ public class Liasolver {
         target = ctx.mkAnd(target, ctx.mkLe(ctx.mkInt(0), varExp));
       }
 
-      target = ctx.mkAnd(target, (BoolExpr) f.transToSMT(ctx, varDef));
+      BoolExpr coreExpr = (BoolExpr) f.transToSMT(ctx, varDef);
+      coreExpr = appendMultipleConditions(ctx, coreExpr);
+      target = ctx.mkAnd(target, coreExpr);
+
+      // when the formula does not contain stars
+      if (f.isLia()) {
+        // append rules
+        target = appendRules(ctx, target);
+      }
+
       if (LogicSupport.dumpLiaFormulas) {
         System.out.println("FOL: " + target.toString());
       }

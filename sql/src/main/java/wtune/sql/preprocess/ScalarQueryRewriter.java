@@ -78,6 +78,8 @@ public class ScalarQueryRewriter extends SqlNodePreprocess {
         // single-column scalar query
         return true;
       }
+      // recursion
+      return needsHandle(select.getWhere(), select.getFrom());
     } else if (pred instanceof SqlBasicCall call) {
       SqlOperator op = call.getOperator();
       SqlKind kind = op.getKind();
@@ -246,6 +248,8 @@ public class ScalarQueryRewriter extends SqlNodePreprocess {
         aliasMap.put(addSingleValue(select), alias);
         return id(alias);
       }
+      // recursion
+      return preprocess0(select);
     } else if (pred instanceof SqlBasicCall call) {
       SqlOperator op = call.getOperator();
       SqlKind kind = op.getKind();

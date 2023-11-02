@@ -1,5 +1,11 @@
 package wtune.superopt.uexpr;
 
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.SetMatching;
+
+import java.util.Map;
+import java.util.Set;
+
 final class ULiaVarImpl implements ULiaVar {
   private UVar var;
 
@@ -49,10 +55,57 @@ final class ULiaVarImpl implements ULiaVar {
   }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    if (this.equals(baseTerm)) return repTerm.copy();
+    return this.copy();
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     if (this.equals(baseTerm)) return repTerm.copy();
     return this.copy();
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    printer.print(var);
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    return false;
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    // use the existing hash
+    // if absent, rename self to obtain hash
+    String key = toString();
+    Integer value = varHash.get(key);
+    if (value == null) {
+      int hash = ("u" + varHash.size()).hashCode();
+      varHash.put(key, hash);
+    }
+    return varHash.get(key);
+  }
+
+  @Override
+  public void sortCommAssocItems() {}
+
+  @Override
+  public Set<String> getFVs() {
+    return var.getFVs();
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    if (that instanceof ULiaVar thatVar) {
+      return var.groupSimilarVariables(thatVar.var(), matching);
+    }
+    return false;
   }
 
   @Override

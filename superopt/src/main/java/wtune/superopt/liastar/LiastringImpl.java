@@ -1,11 +1,13 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.util.PrettyBuilder;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
 
 public class LiastringImpl extends Liastar {
 
@@ -80,8 +82,13 @@ public class LiastringImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    return String.valueOf(value);
+  protected void prettyPrint(PrettyBuilder builder) {
+    builder.print(value);
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return false;
   }
 
   @Override
@@ -104,5 +111,13 @@ public class LiastringImpl extends Liastar {
     return null;
   }
 
+  @Override
+  public int embeddingLayers() {
+    return 0;
+  }
 
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    return transformer.apply(mkString(innerStar, value));
+  }
 }

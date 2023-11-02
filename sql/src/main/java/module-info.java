@@ -9,6 +9,8 @@ module wtune.sql {
   exports wtune.sql.ast;
   exports wtune.sql.ast.constants;
   exports wtune.sql.preprocess;
+  exports wtune.sql.copreprocess;
+  exports wtune.sql.plan.normalize;
 
   requires wtune.common;
   requires org.antlr.antlr4.runtime;

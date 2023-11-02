@@ -20,3 +20,7 @@
 !no_order_by/*
 !db_rule_instances/
 !db_rule_instances/*
+!spider/
+!spider/*
+!spider_large/
+!spider_large/*

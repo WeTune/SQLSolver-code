@@ -1,9 +1,12 @@
 package wtune.sql.preprocess;
 
 import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.parser.SqlParser;
+import org.apache.calcite.sql.validate.SqlConformanceEnum;
 import org.apache.calcite.tools.FrameworkConfig;
 import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Planner;
+import wtune.sql.schema.Schema;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,10 +20,25 @@ import java.util.regex.Pattern;
  */
 public abstract class SqlNodePreprocess {
 
+  private static FrameworkConfig config;
+
   private static List<SqlNodePreprocess> rewriters = null;
+  private static Schema schema;
+
+  // parser config
+  static {
+    Frameworks.ConfigBuilder builder = Frameworks.newConfigBuilder();
+    SqlParser.ConfigBuilder parserConfigBuilder =
+      SqlParser.configBuilder().setConformance(SqlConformanceEnum.BABEL);
+    builder.parserConfig(parserConfigBuilder.build());
+    config = builder.build();
+  }
 
   /** HINT: Add new SqlNode preprocessors HERE. */
   private static void registerPreprocessors() {
+    rewriters.add(new NEQRewriter());
+    rewriters.add(new OrEquationsRewriter());
+    rewriters.add(new NotNullInferer());
     rewriters.add(new DateOpRewriter());
     rewriters.add(new ExtractYearRewriter());
     rewriters.add(new DateConstantRewriter());
@@ -28,12 +46,12 @@ public abstract class SqlNodePreprocess {
     rewriters.add(new NumericConstantRewriter());
     rewriters.add(new NumericComparisonRewriter());
     rewriters.add(new SemiAntiJoinRewriter());
-    rewriters.add(new LikeRewriter());
     rewriters.add(new ScalarQueryRewriter());
     rewriters.add(new HavingAggRewriter());
     rewriters.add(new PredExprRewriter());
     rewriters.add(new CountArgsRewriter());
     rewriters.add(new AggFilterRewriter());
+    rewriters.add(new AggSelectGroupRewriter());
     rewriters.add(new RollupRewriter());
     rewriters.add(new GroupingSetsRewriter());
     rewriters.add(new CastRewriter());
@@ -43,6 +61,14 @@ public abstract class SqlNodePreprocess {
     rewriters.add(new ConstantRowRewriter());
   }
 
+  public static void setSchema(Schema s) {
+    schema = s;
+  }
+
+  public static Schema getSchema() {
+    return schema;
+  }
+
   /**
    * Apply all the registered preprocessors one by one
    * to preprocess the given query.
@@ -50,11 +76,10 @@ public abstract class SqlNodePreprocess {
    * @return the query after preprocessed by all registered preprocessors
    */
   public static String preprocessAll(String sql) {
-    FrameworkConfig config = Frameworks.newConfigBuilder().build();
     Planner planner = Frameworks.getPlanner(config);
     try {
       // string -> sqlnode
-      sql = sql.replace('\"', '\'');
+      sql = sql.replace('\"', '\'').replace(';', ' ');
       SqlNode node = planner.parse(sql);
       String strOld = node.toString();
       // preprocess sqlnode

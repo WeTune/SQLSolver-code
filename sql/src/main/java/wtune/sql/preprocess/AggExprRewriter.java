@@ -102,6 +102,7 @@ public class AggExprRewriter extends SqlNodePreprocess {
       }
       // recursion
       select.setFrom(preprocess(from));
+      select.setWhere(preprocess(select.getWhere()));
     } else if (node instanceof SqlBasicCall call) {
       List<SqlNode> args = call.getOperandList();
       for (int i = 0; i < args.size(); i++) {

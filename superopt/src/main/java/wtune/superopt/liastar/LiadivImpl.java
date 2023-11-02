@@ -1,9 +1,12 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.util.PrettyBuilder;
+
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.function.Function;
 
 public class LiadivImpl extends Liastar {
   Liastar operand1;
@@ -44,8 +47,17 @@ public class LiadivImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    return operand1.toString() + "/" + operand2.toString();
+  protected void prettyPrint(PrettyBuilder builder) {
+    boolean needsParen1 = (operand1 instanceof LiaplusImpl);
+    boolean needsParen2 = (operand1 instanceof LiaplusImpl);
+    prettyPrintBinaryOp(builder, operand1, operand2,
+            needsParen1, needsParen2, " / ");
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return operand1.isPrettyPrintMultiLine()
+            || operand2.isPrettyPrintMultiLine();
   }
 
   @Override
@@ -124,6 +136,18 @@ public class LiadivImpl extends Liastar {
       return tmpZero;
     }
     return this;
+  }
+
+  @Override
+  public int embeddingLayers() {
+    return 0;
+  }
+
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    Liastar operand10 = operand1.transformPostOrder(transformer);
+    Liastar operand20 = operand2.transformPostOrder(transformer);
+    return transformer.apply(mkDiv(innerStar, operand10, operand20));
   }
 
 }

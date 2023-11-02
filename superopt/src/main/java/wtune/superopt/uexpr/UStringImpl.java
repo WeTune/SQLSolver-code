@@ -1,6 +1,12 @@
 package wtune.superopt.uexpr;
 
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.SetMatching;
+
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 public class UStringImpl implements UString {
 
@@ -29,10 +35,46 @@ public class UStringImpl implements UString {
     }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    if (this.equals(baseTerm)) return repTerm.copy();
+    return this.copy();
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     if (this.equals(baseTerm)) return repTerm.copy();
     return this.copy();
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    printer.print("'").print(value).print("'");
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    return false;
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    return value.hashCode();
+  }
+
+  @Override
+  public void sortCommAssocItems() {}
+
+  @Override
+  public Set<String> getFVs() {
+    return new HashSet<>();
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    return true;
   }
 
   @Override

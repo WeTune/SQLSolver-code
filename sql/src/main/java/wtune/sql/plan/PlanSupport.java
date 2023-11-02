@@ -171,14 +171,20 @@ public abstract class PlanSupport {
     return ref == null ? value : traceRef(ctx, ref);
   }
 
-  public static List<Column> tryResolveColumns(PlanContext ctx, List<Value> values) {
+  public static List<Column> tryResolveColumns(PlanContext ctx, List<Value> values, boolean allowsNullColumn) {
     final List<Column> columns = new ArrayList<>(values.size());
     for (Value value : values) {
       final Column column = tryResolveColumn(ctx, value);
-      if (column == null) return null;
-      else columns.add(column);
+      if (column == null) {
+        if (!allowsNullColumn) return null;
+        // otherwise, ignore the null column
+      } else columns.add(column);
     }
     return columns;
+  }
+
+  public static List<Column> tryResolveColumns(PlanContext ctx, List<Value> values) {
+    return tryResolveColumns(ctx, values, false);
   }
 
   public static Column tryResolveColumn(PlanContext ctx, Value value) {
@@ -629,6 +635,10 @@ public abstract class PlanSupport {
       parent = ctx.parentOf(parent);
     }
     return false;
+  }
+
+  public static boolean isSemanticError(PlanContext plan0, PlanContext plan1) {
+    return new PlanError(plan0, plan1).isErrorTrees();
   }
 
   public static boolean isLiteralEq(PlanContext plan0, PlanContext plan1) {

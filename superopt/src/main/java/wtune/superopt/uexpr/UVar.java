@@ -2,11 +2,9 @@ package wtune.superopt.uexpr;
 
 import wtune.common.utils.Copyable;
 import wtune.superopt.fragment.AggFuncKind;
+import wtune.superopt.util.SetMatching;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.*;
 
 import static wtune.common.utils.ArraySupport.concat;
 import static wtune.superopt.uexpr.UVar.VarKind.*;
@@ -58,6 +56,10 @@ public interface UVar extends Copyable<UVar> {
     final UVar[] lhs = v0.is(PROJ) ? new UVar[] {v0} : v0.args();
     final UVar[] rhs = v1.is(PROJ) ? new UVar[] {v1} : v1.args();
     return new UVarImpl(VarKind.CONCAT, NAME_CONCAT, concat(lhs, rhs));
+  }
+
+  static UVar mkConcatRaw(UVar[] vars) {
+    return new UVarImpl(VarKind.CONCAT, NAME_CONCAT, vars);
   }
 
   static UVar mkProj(UName attrName, UVar v) {
@@ -113,4 +115,20 @@ public interface UVar extends Copyable<UVar> {
     if (Arrays.equals(newVars, var.args())) return var.copy();
     else return new UVarImpl(var.kind(), var.name(), newVars);
   }
+
+  /**
+   * @see UTerm#hashForSort
+   */
+  int hashForSort(Map<String, Integer> varHash);
+
+  /**
+   * @see UTerm#getFVs
+   */
+  Set<String> getFVs();
+
+  /**
+   * @see UTerm#groupSimilarVariables
+   */
+  boolean groupSimilarVariables(UVar that, SetMatching<String> matching);
+
 }

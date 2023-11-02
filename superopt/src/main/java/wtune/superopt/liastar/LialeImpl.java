@@ -1,9 +1,11 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.util.PrettyBuilder;
 
 import java.util.HashMap;
 import java.util.Set;
+import java.util.function.Function;
 
 public class LialeImpl extends Liastar {
 
@@ -24,8 +26,15 @@ public class LialeImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    return operand1.toString() + "<=" + operand2.toString();
+  protected void prettyPrint(PrettyBuilder builder) {
+    prettyPrintBinaryOp(builder, operand1, operand2,
+            false, false, " <= ");
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return operand1.isPrettyPrintMultiLine()
+            || operand2.isPrettyPrintMultiLine();
   }
 
   @Override
@@ -132,4 +141,17 @@ public class LialeImpl extends Liastar {
     operand2 = operand2.simplifyIte();
     return this;
   }
+
+  @Override
+  public int embeddingLayers() {
+    return 0;
+  }
+
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    Liastar operand10 = operand1.transformPostOrder(transformer);
+    Liastar operand20 = operand2.transformPostOrder(transformer);
+    return transformer.apply(mkLe(innerStar, operand10, operand20));
+  }
+
 }

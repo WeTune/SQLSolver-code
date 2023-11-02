@@ -1,6 +1,8 @@
 package wtune.superopt.uexpr;
 
-import java.util.Arrays;
+import wtune.superopt.util.SetMatching;
+
+import java.util.*;
 
 import static java.util.Arrays.asList;
 import static wtune.common.utils.Commons.joining;
@@ -102,4 +104,61 @@ record UVarImpl(VarKind kind, UName name, UVar[] arguments) implements UVar {
     if (kind == VarKind.BASE) return name.hashCode();
     return name.hashCode() * 31 + Arrays.hashCode(arguments);
   }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    if (is(VarKind.BASE)) {
+      // use the existing hash
+      // if absent, rename self to obtain hash
+      String key = toString();
+      Integer value = varHash.get(key);
+      if (value == null) {
+        int hash = ("x" + varHash.size()).hashCode();
+        varHash.put(key, hash);
+      }
+      return varHash.get(key);
+    } else {
+      int size = arguments.length;
+      int[] hashes = new int[size + 1];
+      for (int i = 0; i < size; i++) {
+        hashes[i] = arguments[i].hashForSort(varHash);
+      }
+      hashes[size] = name.hashCode();
+      return Arrays.hashCode(hashes);
+    }
+  }
+
+  @Override
+  public Set<String> getFVs() {
+    if (is(VarKind.BASE)) {
+      Set<String> fv = new HashSet<>();
+      fv.add(toString());
+      return fv;
+    }
+    Set<String> fvs = new HashSet<>();
+    for (UVar arg : arguments) {
+      fvs.addAll(arg.getFVs());
+    }
+    return fvs;
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UVar that, SetMatching<String> matching) {
+    int size = arguments.length;
+    if (kind != that.kind()
+            || !is(VarKind.BASE) && !Objects.equals(name, that.name())
+            || size != that.args().length)
+      return false;
+    if (is(VarKind.BASE)) {
+      return matching.match(toString(), that.toString());
+    }
+    UVar[] thatArgs = that.args();
+    for (int i = 0; i < size; i++) {
+      if (!arguments[i].groupSimilarVariables(thatArgs[i], matching))
+        return false;
+    }
+    return true;
+  }
+
+
 }

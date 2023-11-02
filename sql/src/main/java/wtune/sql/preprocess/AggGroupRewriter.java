@@ -6,10 +6,10 @@ import org.apache.calcite.tools.Frameworks;
 import org.apache.calcite.tools.Planner;
 import wtune.sql.Rewriter;
 
-public class AggGroupRewriter extends SqlNodePreprocess {
+public class AggGroupRewriter extends RecursiveRewriter {
 
   @Override
-  public SqlNode preprocess(SqlNode node) {
+  public SqlNode handleNode(SqlNode node) {
     // SqlNode -> SQL
     String sql = node.toString().replace("\n", " ").replace("`", ""), newSql;
     if (!sql.contains("GROUP BY")) return node;

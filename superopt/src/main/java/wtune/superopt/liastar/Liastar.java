@@ -1,8 +1,10 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.util.PrettyBuilder;
 
 import java.util.*;
+import java.util.function.Function;
 
 import static wtune.superopt.liastar.LiaOpType.*;
 
@@ -47,6 +49,8 @@ public abstract class Liastar {
 
 
   public abstract Liastar mergeMult(HashMap<LiamultImpl, String> multToVar);
+
+  public abstract int embeddingLayers();
 
   public static String newId() {
     freshVarId.set(freshVarId.get() + 1);
@@ -889,6 +893,224 @@ public abstract class Liastar {
 
   public Liastar subformulaWithoutStar() {
     return this;
+  }
+
+  /**
+   * Transform the LIA* formula in post-order.
+   * The method should create new instances of LIA* formulas
+   * to avoid modification of their fields.
+   */
+  public abstract Liastar transformPostOrder(Function<Liastar, Liastar> transformer);
+
+  @Override
+  public String toString() {
+    PrettyBuilder builder = new PrettyBuilder();
+    //builder.setAutoNewLine(50);
+    prettyPrint(builder);
+    return builder.toString();
+  }
+
+
+  protected static void prettyPrintBinaryOp(PrettyBuilder builder,
+                                            Liastar operand1, Liastar operand2,
+                                            boolean needsParen1, boolean needsParen2,
+                                            String op) {
+    prettyPrintBinaryOp(builder, operand1, operand2,
+            needsParen1, needsParen2, false, op);
+  }
+
+  protected static void prettyPrintBinaryOp(PrettyBuilder builder,
+                                            Liastar operand1, Liastar operand2,
+                                            boolean needsParen1, boolean needsParen2,
+                                            boolean autoNewLine,
+                                            String op) {
+    boolean multiLine1 = operand1.isPrettyPrintMultiLine();
+    boolean multiLine2 = operand2.isPrettyPrintMultiLine();
+    prettyPrintBinaryOp(builder, operand1, operand2,
+            needsParen1, needsParen2, multiLine1, multiLine2,
+            autoNewLine, op);
+  }
+
+  /** autoNewLine: whether auto new line between operands is allowed */
+  protected static void prettyPrintBinaryOp(PrettyBuilder builder,
+                                     Liastar operand1, Liastar operand2,
+                                     boolean needsParen1, boolean needsParen2,
+                                     boolean multiLine1, boolean multiLine2,
+                                     boolean autoNewLine,
+                                     String op) {
+    if (needsParen1) {
+      if (multiLine1) {
+        builder.print("(").indent(4).println();
+        operand1.prettyPrint(builder);
+        builder.indent(-4).println().print(")");
+      } else {
+        builder.print("(");
+        operand1.prettyPrint(builder);
+        builder.print(")");
+      }
+    } else
+      operand1.prettyPrint(builder);
+
+    if (multiLine1 && multiLine2) {
+      builder.println().println(op);
+    } else if (multiLine1) {
+      builder.print(op);
+    } else if (multiLine2) {
+      builder.println(op);
+    } else {
+      builder.print(op);
+    }
+
+    // the only way to trigger auto new line
+    if (autoNewLine) {
+      builder.setAutoNewLineEnabled(true);
+      builder.print("");
+      builder.setAutoNewLineEnabled(false);
+    }
+
+    if (needsParen2) {
+      if (multiLine2) {
+        builder.print("(").indent(4).println();
+        operand2.prettyPrint(builder);
+        builder.indent(-4).println().print(")");
+      } else {
+        builder.print("(");
+        operand2.prettyPrint(builder);
+        builder.print(")");
+      }
+    } else
+      operand2.prettyPrint(builder);
+  }
+
+  protected abstract void prettyPrint(PrettyBuilder builder);
+
+  protected abstract boolean isPrettyPrintMultiLine();
+
+  public static ArrayList<String> newNVarNames(int n) {
+    ArrayList<String> result = new ArrayList<>();
+    for (int i = 0; i < n; ++ i) {
+      result.add(newVarName());
+    }
+    return result;
+  }
+
+  public static Liastar eqNVectors(boolean innerStar, ArrayList<String> leftVector, ArrayList<ArrayList<String>> rightVectors) {
+    Liastar result = null;
+    for (int i = 0; i < leftVector.size(); ++ i) {
+      LiavarImpl leftVar = (LiavarImpl) mkVar(innerStar, leftVector.get(i));
+      Liastar rightPlusFormula = null;
+      for (int j = 0; j < rightVectors.size(); ++ j) {
+        LiavarImpl rightVar = (LiavarImpl) mkVar(innerStar, rightVectors.get(j).get(i));
+        rightPlusFormula = (rightPlusFormula == null) ? rightVar : mkPlus(innerStar, rightPlusFormula, rightVar);
+      }
+      Liastar leftEqRight = mkEq(innerStar, leftVar, rightPlusFormula);
+      result = (result == null) ? leftEqRight : mkAnd(innerStar, result, leftEqRight);
+    }
+    return result;
+  }
+
+  public static Liastar calculateUnderApprox(Liastar formula, int n) {
+    Liastar result = spanLiastarByNVectors(formula, n);
+    return expandStarWithUnderapp(result, 1);
+  }
+
+  public static Liastar spanLiastarByNVectors(Liastar formula, int n) {
+    switch (formula.getType()) {
+      case LPLUS: case LMULT: case LVAR: case LLT: case LLE: case LEQ: case LDIV: case LCONST: case LSTRING: case LFUNC: {
+        return formula;
+      }
+      case LOR: {
+        LiaorImpl orFormula = (LiaorImpl) formula;
+        orFormula.operand1 = spanLiastarByNVectors(orFormula.operand1, n);
+        orFormula.operand2 = spanLiastarByNVectors(orFormula.operand2, n);
+        return orFormula;
+      }
+      case LAND: {
+        LiaandImpl andFormula = (LiaandImpl) formula;
+        andFormula.operand1 = spanLiastarByNVectors(andFormula.operand1, n);
+        andFormula.operand2 = spanLiastarByNVectors(andFormula.operand2, n);
+        return andFormula;
+      }
+      case LITE: {
+        LiaiteImpl iteFormula = (LiaiteImpl) formula;
+        iteFormula.cond = spanLiastarByNVectors(iteFormula.cond, n);
+        return iteFormula;
+      }
+      case LNOT: {
+        LianotImpl notFormula = (LianotImpl) formula;
+        notFormula.operand = spanLiastarByNVectors(notFormula.operand, n);
+        return notFormula;
+      }
+      case LSUM: {
+        LiasumImpl sumFormula = (LiasumImpl) formula;
+        ArrayList<ArrayList<String>> newNameVectors = new ArrayList<>();
+        for (int i = 0; i < n; ++ i) {
+          newNameVectors.add(newNVarNames(sumFormula.outerVector.size()));
+        }
+        Liastar outerEqSumOfNVectors = eqNVectors(sumFormula.innerStar, sumFormula.outerVector, newNameVectors);
+        Liastar newLiasumFormulas = null;
+        for (int i = 0; i < n; ++ i) {
+          ArrayList<String> newOuterNames = newNameVectors.get(i);
+          LiasumImpl tmpSumFormula = (LiasumImpl) sumFormula.deepcopy();
+          tmpSumFormula.outerVector = newOuterNames;
+          tmpSumFormula = (LiasumImpl) renameAllInnerVars(tmpSumFormula);
+          tmpSumFormula.constraints = spanLiastarByNVectors(tmpSumFormula.constraints, n);
+          newLiasumFormulas = (newLiasumFormulas == null) ? tmpSumFormula : mkAnd(sumFormula.innerStar, newLiasumFormulas, tmpSumFormula);
+        }
+        Liastar result = mkAnd(sumFormula.innerStar, outerEqSumOfNVectors, newLiasumFormulas);
+        return result;
+      }
+      default: {
+        assert false;
+        System.err.println("not support liaterm");
+        return null;
+      }
+    }
+  }
+
+  public static Liastar renameAllInnerVars(Liastar formula) {
+    switch (formula.getType()) {
+      case LFUNC: case LSTRING: case LCONST: case LDIV: case LEQ: case LLE: case LLT: case LVAR: case LMULT: case LPLUS: {
+         return formula;
+      }
+      case LOR: {
+        LiaorImpl orFormula = (LiaorImpl) formula;
+        orFormula.operand1 = renameAllInnerVars(orFormula.operand1);
+        orFormula.operand2 = renameAllInnerVars(orFormula.operand2);
+        return orFormula;
+      }
+      case LAND: {
+        LiaandImpl andFormula = (LiaandImpl) formula;
+        andFormula.operand1 = renameAllInnerVars(andFormula.operand1);
+        andFormula.operand2 = renameAllInnerVars(andFormula.operand2);
+        return andFormula;
+      }
+      case LITE: {
+        LiaiteImpl iteFormula = (LiaiteImpl) formula;
+        iteFormula.cond = renameAllInnerVars(iteFormula.cond);
+        return iteFormula;
+      }
+      case LNOT: {
+        LianotImpl notFormula = (LianotImpl) formula;
+        notFormula.operand = renameAllInnerVars(notFormula.operand);
+        return notFormula;
+      }
+      case LSUM: {
+        LiasumImpl sumFormula = (LiasumImpl) formula;
+        HashMap<String, String> renameMapping = new HashMap<>();
+        for (String innerVarName : sumFormula.innerVector) {
+          renameMapping.put(innerVarName, newVarName());
+        }
+        sumFormula = (LiasumImpl) replaceVars(sumFormula, renameMapping);
+        sumFormula.constraints = renameAllInnerVars(sumFormula.constraints);
+        return sumFormula;
+      }
+      default: {
+        assert false;
+        System.err.println("not support liaterm");
+        return null;
+      }
+    }
   }
 
 }

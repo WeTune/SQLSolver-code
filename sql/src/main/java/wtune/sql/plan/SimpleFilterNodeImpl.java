@@ -1,7 +1,7 @@
 package wtune.sql.plan;
 
 class SimpleFilterNodeImpl implements SimpleFilterNode {
-  private final Expression predicate;
+  private Expression predicate;
 
   SimpleFilterNodeImpl(Expression predicate) {
     this.predicate = predicate;
@@ -10,5 +10,10 @@ class SimpleFilterNodeImpl implements SimpleFilterNode {
   @Override
   public Expression predicate() {
     return predicate;
+  }
+
+  @Override
+  public void setPredicate(Expression predicate) {
+    this.predicate = predicate;
   }
 }

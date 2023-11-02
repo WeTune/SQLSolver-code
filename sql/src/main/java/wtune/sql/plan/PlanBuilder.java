@@ -265,7 +265,11 @@ class PlanBuilder {
         success = false;
         onError(FAILURE_INVALID_PLAN);
       } else {
-        plan.setChild(parentNodeId, childIndex++, subRoot);
+        // For different parents, handle different cases
+        if(plan.kindOf(parentNodeId) == PlanKind.Filter)
+          plan.setChild(parentNodeId, childIndex++, subRoot);
+        if(plan.kindOf(parentNodeId) == PlanKind.Proj)
+          plan.setChild(parentNodeId, plan.nodeAt(parentNodeId).numChildren(plan), subRoot);
         plan.setSubQueryPlanRootId(subQuery.nodeId(), subRoot);
         plan.setSubQueryPlanRootIdBySqlNode(subQuery, subRoot);
       }

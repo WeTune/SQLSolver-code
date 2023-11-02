@@ -1,12 +1,11 @@
 package wtune.superopt.logic;
 
-import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
+import wtune.common.utils.NameSequence;
 import wtune.common.utils.NaturalCongruence;
 import wtune.superopt.liastar.*;
 import wtune.superopt.uexpr.*;
 
-import java.lang.reflect.Array;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -20,33 +19,36 @@ import static wtune.superopt.uexpr.UName.NAME_IS_NULL;
 
 public class SqlSolverSupport {
 
-  private HashMap<USum, String> sumVarMap = new HashMap<>();
   private final UTerm query1;
   private final UTerm query2;
   private final UVar outVar;
-  private int uliaVarId = 0;
+  private final NameSequence liaVarName;
+  private final BoundVarMatcher matcher;
 
   public SqlSolverSupport(UTerm q1, UTerm q2, UVar v) {
     this.query1 = q1;
     this.query2 = q2;
     this.outVar = v;
+    liaVarName = NameSequence.mkIndexed("u", 0);
+    matcher = new BoundVarMatcher(liaVarName, outVar);
   }
 
   public Liastar uexpToLiastar() {
-
-    UTerm q1Lia = replaceSummations(sumVarMap, query1);
-    UTerm q2Lia = replaceSummations(sumVarMap, query2);
+    Map<USum, String> sumVarMap = new HashMap<>();
+    Set<USum> sums1 = new HashSet<>(), sums2 = new HashSet<>();
+    UTerm q1Lia = replaceSummations(sumVarMap, sums1, query1);
+    UTerm q2Lia = replaceSummations(sumVarMap, sums2, query2);
 
     if (sumVarMap.isEmpty()) { // no summation
       return uexpWOSumToLiastar(q1Lia, q2Lia);
     } else {
-      return uexpWithSumToLiastar(q1Lia, q2Lia);
+      return uexpWithSumToLiastar(q1Lia, q2Lia, sumVarMap, sums1, sums2);
     }
   }
 
   HashSet<UVar> initFreeTuples() {
     HashSet<UVar> result = new HashSet<>();
-    if(outVar.kind() == UVar.VarKind.BASE) {
+    if (outVar.kind() == UVar.VarKind.BASE) {
       result.add(outVar.copy());
     } else {
       result.addAll(List.of(outVar.args()));
@@ -54,7 +56,8 @@ public class SqlSolverSupport {
     return result;
   }
 
-  Liastar uexpWithSumToLiastar(UTerm t1, UTerm t2) {
+  Liastar uexpWithSumToLiastar(UTerm t1, UTerm t2, Map<USum, String> sumVarMap,
+                               Set<USum> sumSet1, Set<USum> sumSet2) {
     HashMap<UTerm, String> termMap = new HashMap<>();
     Liastar result = Liastar.mkNot(false,
         Liastar.mkEq(false,
@@ -62,21 +65,32 @@ public class SqlSolverSupport {
             transUexpWithoutSum(false, t2, termMap, new HashSet<>())
         )
     );
-    ArrayList<UTerm> sums = new ArrayList<>(sumVarMap.keySet());
+
+    // convert the map "sumVarMap" to two lists "sums" and "sumVars"
+    // For each i, (sums[i] -> sumVars[i]) represents an entry in "sumVarMap"
+    ArrayList<UTerm> sums = new ArrayList<>();
     ArrayList<String> sumVars = new ArrayList<>();
-    for (int i = 0; i < sums.size(); ++i) {
-      sumVars.add(sumVarMap.get(sums.get(i)));
+    for (Map.Entry<USum, String> entry : sumVarMap.entrySet()) {
+      sums.add(entry.getKey());
+      sumVars.add(entry.getValue());
     }
+
+    // For each summation S in the set, find i so that S equals sums[i]
+    // Each such index refers to a map entry (especially the key)
+    Set<Integer> sumIndexSet1 = sumSet1.stream().map(sums::indexOf).collect(Collectors.toSet());
+    Set<Integer> sumIndexSet2 = sumSet2.stream().map(sums::indexOf).collect(Collectors.toSet());
+
     HashSet<UVar> freeTuples = initFreeTuples();
     result = Liastar.mkAnd(false, result,
-        sumsToLiaStar(false, true, sums, sumVars, termMap, freeTuples)
+        sumsToLiaStar(false, true, sums, sumVars, sumIndexSet1, sumIndexSet2, termMap, freeTuples)
     );
     result.prepareInnervector(new HashSet<>(result.collectVarSet()));
     if (LogicSupport.dumpLiaFormulas) {
-      System.out.println("Lia* before simplification: " + result);
+      System.out.println("Lia* before simplification: ");
+      System.out.println(result);
     }
-    result.simplifyIte();
-    return result;
+    // simplify the LIA* formula
+    return LiaStarSimplifier.getInstance().simplify(result);
   }
 
   private Liastar getOrRegisterLiaForUVar(UVar uVar, Map<UVar, String> uVarsToLiaVars) {
@@ -112,19 +126,19 @@ public class SqlSolverSupport {
 
         int constVal = 0;
         int i = 0;
-        for(i = 0; i < subt.size(); ++ i) {
+        for (i = 0; i < subt.size(); ++ i) {
           UTerm cur = subt.get(i);
-          if(cur instanceof UConst)
+          if (cur instanceof UConst)
             constVal = constVal + ((UConst)cur).value();
           else
             break;
         }
-        if(i == subt.size()) return mkConst(false, constVal);
+        if (i == subt.size()) return mkConst(false, constVal);
 
         for (UTerm t : subt) {
           final Liastar curLia = transUexpNoSum(t, uVarsToLiaVars);
-          if(curLia instanceof LiaconstImpl) {
-            if( ((LiaconstImpl)curLia).getValue() == 0 )
+          if (curLia instanceof LiaconstImpl) {
+            if ( ((LiaconstImpl)curLia).getValue() == 0 )
               continue;
           }
           if (result == null) {
@@ -142,11 +156,11 @@ public class SqlSolverSupport {
         final List<UTerm> subt = exp.subTerms();
         for (UTerm t : subt) {
           final Liastar curLia = transUexpNoSum(t, uVarsToLiaVars);
-          if(curLia instanceof LiaconstImpl) {
+          if (curLia instanceof LiaconstImpl) {
             long value = ((LiaconstImpl)curLia).getValue();
-            if( value == 0 )
+            if ( value == 0 )
               return mkConst(false, 0);
-            if(value == 1)
+            if (value == 1)
               continue;
           }
           if (result == null) result = curLia;
@@ -197,7 +211,7 @@ public class SqlSolverSupport {
           final Liastar liaVar0 = transUexpNoSum(pred.args().get(0), uVarsToLiaVars);
           final Liastar liaVar1 = transUexpNoSum(pred.args().get(1), uVarsToLiaVars);
 
-          if(liaVar0 instanceof LiaconstImpl && liaVar1 instanceof LiaconstImpl) {
+          if (liaVar0 instanceof LiaconstImpl && liaVar1 instanceof LiaconstImpl) {
             long value0 = ((LiaconstImpl)liaVar0).getValue();
             long value1 = ((LiaconstImpl)liaVar1).getValue();
             boolean b = switch (pred.predKind()) {
@@ -209,7 +223,7 @@ public class SqlSolverSupport {
               case GT -> value0 > value1;
               default -> throw new IllegalArgumentException("unsupported predicate in Uexpr.");
             };
-            return (b == true) ? mkConst(false, 1) : mkConst(false, 0);
+            return b ? mkConst(false, 1) : mkConst(false, 0);
           }
 
           final Liastar target = switch (pred.predKind()) {
@@ -234,6 +248,34 @@ public class SqlSolverSupport {
       case STRING -> {
         return Liastar.mkString(false, ((UString) exp).value());
       }
+      case FUNC -> {
+        UFunc func = (UFunc) exp;
+        String funcName = func.funcName().toString();
+        // in_list_N
+        if (PredefinedFunctions.belongsToFamily(func, PredefinedFunctions.NAME_IN_LIST)) {
+          List<Liastar> liaOps = new ArrayList<>();
+          List<UTerm> args = exp.subTerms();
+          for (UTerm arg : args) {
+            Liastar liaOp = transUexpNoSum(arg, uVarsToLiaVars);
+            liaOps.add(liaOp);
+          }
+          return Liastar.mkFunc(false, funcName, liaOps);
+        }
+        // other functions
+        switch (funcName) {
+          case PredefinedFunctions.NAME_LIKE: {
+            assert exp.subTerms().size() == 2;
+            UTerm op0 = exp.subTerms().get(0);
+            UTerm op1 = exp.subTerms().get(1);
+            Liastar liaOp0 = transUexpNoSum(op0, uVarsToLiaVars);
+            Liastar liaOp1 = transUexpNoSum(op1, uVarsToLiaVars);
+            return Liastar.mkFunc(false, PredefinedFunctions.NAME_LIKE, List.of(liaOp0, liaOp1));
+          }
+          default: {
+            throw new UnsupportedOperationException("unsupported function: " + funcName);
+          }
+        }
+      }
       default -> {
         throw new IllegalArgumentException("unsupported Uexpr type.");
       }
@@ -245,17 +287,12 @@ public class SqlSolverSupport {
     return Liastar.mkNot(false, Liastar.mkEq(false, transUexpNoSum(t1, varMap), transUexpNoSum(t2, varMap)));
   }
 
-  int newUliaVarId() {
-    uliaVarId = uliaVarId + 1;
-    return uliaVarId;
-  }
-
   String newUliaVarName() {
-    int id = newUliaVarId();
-    return "u" + id;
+    return liaVarName.next();
   }
 
-  void mergeSameSum(ArrayList<UTerm> sumList) {
+  // TODO: >=3 equal summations are not unified "correctly"
+  void unifyEqualSummations(ArrayList<UTerm> sumList) {
     if (sumList.size() > 1) {
       for (int i = 0; i < sumList.size(); i++) {
         for (int j = i + 1; j < sumList.size(); j++) {
@@ -269,8 +306,8 @@ public class SqlSolverSupport {
 
 
   public static boolean overlap(HashSet<UVar> s1, HashSet<UVar> s2) {
-    for(UVar v : s1) {
-      if(s2.contains(v)) {
+    for (UVar v : s1) {
+      if (s2.contains(v)) {
         return true;
       }
     }
@@ -279,14 +316,14 @@ public class SqlSolverSupport {
 
   static ArrayList<HashSet<UVar>> buildEqRelation(Set<Pair<UVar, UVar>> eqVarPairs) {
     ArrayList<HashSet<UVar>> eqRels = new ArrayList<>();
-    for(Pair<UVar, UVar> pair : eqVarPairs) {
+    for (Pair<UVar, UVar> pair : eqVarPairs) {
       UVar v1 = pair.getLeft();
       UVar v2 = pair.getRight();
       HashSet<UVar> targetSet = null;
-      for(int i = 0; i < eqRels.size(); ++ i) {
+      for (int i = 0; i < eqRels.size(); ++ i) {
         HashSet<UVar> eqRel = eqRels.get(i);
-        if(eqRel.contains(v1) || eqRel.contains(v2)) {
-          if(targetSet == null) {
+        if (eqRel.contains(v1) || eqRel.contains(v2)) {
+          if (targetSet == null) {
             targetSet = eqRel;
           } else {
             targetSet.addAll(eqRel);
@@ -296,7 +333,7 @@ public class SqlSolverSupport {
           targetSet.add(v2.copy());
         }
       }
-      if(targetSet == null) {
+      if (targetSet == null) {
         HashSet<UVar> eqRel = new HashSet<>();
         eqRel.add(v1.copy());
         eqRel.add(v2.copy());
@@ -305,8 +342,8 @@ public class SqlSolverSupport {
     }
 
     ArrayList<HashSet<UVar>> result = new ArrayList<>();
-    for(HashSet<UVar> s : eqRels) {
-      if(!s.isEmpty()) {
+    for (HashSet<UVar> s : eqRels) {
+      if (!s.isEmpty()) {
         result.add(s);
       }
     }
@@ -316,8 +353,8 @@ public class SqlSolverSupport {
   public static boolean hasFreeTuple(UVar v, HashSet<UVar> freeTuples) {
     switch (v.kind()) {
       case PROJ -> {
-        for(UVar arg : v.args()) {
-          if(hasFreeTuple(arg, freeTuples)) {
+        for (UVar arg : v.args()) {
+          if (hasFreeTuple(arg, freeTuples)) {
             return true;
           }
         }
@@ -334,7 +371,7 @@ public class SqlSolverSupport {
 
   UVar selectMiniNameUVar(HashSet<UVar> vars) {
     UVar miniVar = null;
-    for(UVar v : vars) {
+    for (UVar v : vars) {
       if (miniVar == null) {
         miniVar = v.copy();
       } else if (v.toString().compareTo(miniVar.toString()) < 0) {
@@ -365,7 +402,7 @@ public class SqlSolverSupport {
       case MULTIPLY: {
         UMul term = (UMul) expr;
         int result = 0;
-        for(UTerm subterm : term.subTerms()) {
+        for (UTerm subterm : term.subTerms()) {
           result = result + computeTargetTupleScoreForOneUTerm(subterm, curSet, targetTuple, existingTerms);
         }
         return result;
@@ -396,7 +433,7 @@ public class SqlSolverSupport {
       case ADD: {
         UAdd term = (UAdd) expr;
         int result = 0;
-        for(UTerm subterm : term.subTerms()) {
+        for (UTerm subterm : term.subTerms()) {
           result = result + computeTargetTupleScoreForOneUTerm(subterm, curSet, targetTuple, existingTerms);
         }
         return result;
@@ -409,7 +446,7 @@ public class SqlSolverSupport {
 
   int computeScoreForTargetTuple(ArrayList<UTerm> sumList, HashSet<UVar> curSet, UVar targetTuple, Set<UTerm> existingTerms) {
     int result = 0;
-    for(UTerm term : sumList) {
+    for (UTerm term : sumList) {
       result = result + computeTargetTupleScoreForOneUTerm(term, curSet, targetTuple, existingTerms);
     }
     return result;
@@ -417,17 +454,17 @@ public class SqlSolverSupport {
 
   UVar buildTargetTuplesForOneEqrel(ArrayList<UTerm> sumList, HashSet<UVar> curSet, HashSet<UVar> freeTuples, Set<UTerm> existingTerms) {
     HashSet<UVar> targetTuples = new HashSet<>();
-    for(UVar v : curSet) {
-      if(existingTerms.contains(UVarTerm.mk(v))) {
+    for (UVar v : curSet) {
+      if (existingTerms.contains(UVarTerm.mk(v))) {
         targetTuples.add(v.copy());
       }
     }
-    if(!targetTuples.isEmpty()) {
+    if (!targetTuples.isEmpty()) {
       int maxScore = -1;
       UVar targetTuple = null;
-      for(UVar var : targetTuples) {
+      for (UVar var : targetTuples) {
         int curScore = computeScoreForTargetTuple(sumList, curSet, var, existingTerms);
-        if(curScore > maxScore) {
+        if (curScore > maxScore) {
           targetTuple = var;
           maxScore = curScore;
         }
@@ -436,17 +473,17 @@ public class SqlSolverSupport {
     }
 
     targetTuples = new HashSet<>();
-    for(UVar v : curSet) {
-      if(hasFreeTuple(v, freeTuples)) {
+    for (UVar v : curSet) {
+      if (hasFreeTuple(v, freeTuples)) {
         targetTuples.add(v.copy());
       }
     }
-    if(!targetTuples.isEmpty()) {
+    if (!targetTuples.isEmpty()) {
       int maxScore = -1;
       UVar targetTuple = null;
-      for(UVar var : targetTuples) {
+      for (UVar var : targetTuples) {
         int curScore = computeScoreForTargetTuple(sumList, curSet, var, existingTerms);
-        if(curScore > maxScore) {
+        if (curScore > maxScore) {
           targetTuple = var;
           maxScore = curScore;
         }
@@ -459,7 +496,7 @@ public class SqlSolverSupport {
 
   ArrayList<UVar> buildTargetTuples(ArrayList<UTerm> sumList, ArrayList<HashSet<UVar>> eqRels, HashSet<UVar> freeTuples, Set<UTerm> existingTerms) {
     ArrayList<UVar> targetTuples = new ArrayList<>();
-    for(int i = 0; i < eqRels.size(); ++ i) {
+    for (int i = 0; i < eqRels.size(); ++ i) {
       HashSet<UVar> curSet = eqRels.get(i);
       targetTuples.add(buildTargetTuplesForOneEqrel(sumList, curSet, freeTuples, existingTerms));
     }
@@ -468,20 +505,20 @@ public class SqlSolverSupport {
 
   void addEqSetToRels(ArrayList<HashSet<UVar>> eqRels, HashSet<UVar> newSet) {
     int i = 0;
-    for( ; i < eqRels.size(); ++ i) {
+    for ( ; i < eqRels.size(); ++ i) {
       HashSet<UVar> curSet = eqRels.get(i);
       boolean succeed = false;
-      for(UVar v : newSet) {
-        if(curSet.contains(v)) {
+      for (UVar v : newSet) {
+        if (curSet.contains(v)) {
           curSet.addAll(newSet);
           succeed = true;
           break;
         }
       }
-      if(succeed == true)
+      if (succeed)
         break;
     }
-    if(i == eqRels.size()) {
+    if (i == eqRels.size()) {
       eqRels.add(newSet);
     }
   }
@@ -491,12 +528,12 @@ public class SqlSolverSupport {
       case PROJ -> {
         UName attrName = UName.mk(v.name().toString());
         UVar innerTuple = v.args()[0];
-        for(int i = 0; i < eqRels.size(); ++ i) {
+        for (int i = 0; i < eqRels.size(); ++ i) {
           HashSet<UVar> curSet = eqRels.get(i);
-          if(curSet.contains(innerTuple)) {
+          if (curSet.contains(innerTuple)) {
             HashSet<UVar> newSet = new HashSet<>();
             newSet.add(v);
-            for(UVar tuple : curSet) {
+            for (UVar tuple : curSet) {
               UVar eqTuple = (tuple.kind() == UVar.VarKind.BASE) ? tuple.copy() : tuple.args()[0].copy();
               newSet.add(UVar.mkProj(attrName,eqTuple));
             }
@@ -505,7 +542,7 @@ public class SqlSolverSupport {
           } else if (any(curSet, arg -> arg.isUsing(innerTuple))) {
             HashSet<UVar> newSet = new HashSet<>();
             newSet.add(v);
-            for(UVar tuple : curSet) {
+            for (UVar tuple : curSet) {
               UVar eqTuple = (tuple.kind() == UVar.VarKind.BASE) ? tuple.copy() : tuple.args()[0].copy();
               UVar newTuple = UVar.mkProj(attrName,eqTuple);
               if (existingTerms.contains(UVarTerm.mk(newTuple))) {
@@ -531,13 +568,13 @@ public class SqlSolverSupport {
       modified = false;
       for (int i = 0; i < eqRels.size(); ++i) {
         HashSet<UVar> thisSet = eqRels.get(i);
-        if(thisSet == null) continue;
+        if (thisSet == null) continue;
 
-        for(int j = i + 1; j < eqRels.size(); ++ j) {
+        for (int j = i + 1; j < eqRels.size(); ++ j) {
           HashSet<UVar> thatSet = eqRels.get(j);
-          if(thatSet == null) continue;
+          if (thatSet == null) continue;
 
-          if(overlap(thisSet, thatSet)) {
+          if (overlap(thisSet, thatSet)) {
             thisSet.addAll(thatSet);
             eqRels.set(i, thisSet);
             eqRels.set(j, null);
@@ -547,8 +584,8 @@ public class SqlSolverSupport {
       }
     }
 
-    for(int i = 0; i < eqRels.size(); ++ i) {
-      if(eqRels.get(i) == null) {
+    for (int i = 0; i < eqRels.size(); ++ i) {
+      if (eqRels.get(i) == null) {
         eqRels.remove(i);
         i --;
       }
@@ -557,10 +594,10 @@ public class SqlSolverSupport {
 
   void expandEqRelation(ArrayList<HashSet<UVar>> eqRels, ArrayList<UTerm> sumList, Set<UTerm> existingTerms) {
     HashSet<UVar> tuples = new HashSet<>();
-    for(UTerm t : sumList) {
+    for (UTerm t : sumList) {
       tuples.addAll(searchFreeUnaryVars(t));
     }
-    for(UVar v : tuples) {
+    for (UVar v : tuples) {
       addVarToEqRel(eqRels, v, existingTerms);
     }
 
@@ -568,11 +605,11 @@ public class SqlSolverSupport {
   }
 
   void rewriteWithEqRelation(UTerm cur, ArrayList<HashSet<UVar>> eqRels, ArrayList<UVar> targetTuples) {
-    for(int j = 0; j < eqRels.size(); ++ j) {
+    for (int j = 0; j < eqRels.size(); ++ j) {
       HashSet<UVar> curSet = eqRels.get(j);
       UVar targetTuple = targetTuples.get(j);
-      for(UVar v : curSet) {
-        if(!v.equals(targetTuple)) {
+      for (UVar v : curSet) {
+        if (!v.equals(targetTuple)) {
           cur.replaceVarInplace(v, targetTuple, false);
         }
       }
@@ -590,11 +627,11 @@ public class SqlSolverSupport {
   }
 
   void rewriteSingleUTermWithEqRelation(UTerm cur, ArrayList<HashSet<UVar>> eqRels, ArrayList<UVar> targetTuples) {
-    for(int j = 0; j < eqRels.size(); ++ j) {
+    for (int j = 0; j < eqRels.size(); ++ j) {
       HashSet<UVar> curSet = eqRels.get(j);
       UVar targetTuple = targetTuples.get(j);
-      for(UVar v : curSet) {
-        if(!v.equals(targetTuple)) {
+      for (UVar v : curSet) {
+        if (!v.equals(targetTuple)) {
           if (cur.kind() == MULTIPLY) {
             UMul mul = (UMul) cur;
             List<UTerm> subterms = mul.subTerms();
@@ -617,17 +654,17 @@ public class SqlSolverSupport {
 
 
   boolean allIsMult(ArrayList<UTerm> sumList) {
-    for(UTerm t : sumList) {
-      if(!(t instanceof UMul)) {
+    for (UTerm t : sumList) {
+      if (!(t instanceof UMul)) {
         return false;
       }
     }
     return true;
   }
 
-  boolean isUsingTuples(UVar var, HashSet<UVar> freeTuples) {
-    for(UVar v : freeTuples) {
-      if(var.isUsing(v)) {
+  boolean isUsingTuples(UVar var, Set<UVar> freeTuples) {
+    for (UVar v : freeTuples) {
+      if (var.isUsing(v)) {
         return true;
       }
     }
@@ -635,26 +672,26 @@ public class SqlSolverSupport {
   }
 
   void rewriteSumsWithIndPred(ArrayList<UTerm> sumList, HashSet<UVar> freeTuples, Set<UTerm> existingTerms) {
-    if(!allIsMult(sumList)) {
+    if (!allIsMult(sumList)) {
       return;
     }
-    for(UTerm curExp : sumList) {
+    for (UTerm curExp : sumList) {
       Set<Pair<UVar, UVar>> eqVars = collectPredicatesFromOneTerm(curExp);
       UMul tmp = (UMul) curExp;
-      for(UTerm term : tmp.subTerms()) {
-        if(term instanceof UNeg) {
+      for (UTerm term : tmp.subTerms()) {
+        if (term instanceof UNeg) {
           term = ((UNeg) term).body();
-        } else if(term instanceof USquash) {
+        } else if (term instanceof USquash) {
           term = ((USquash) term).body();
         }
-        if(!(term instanceof UPred))
+        if (!(term instanceof UPred))
           continue;
         UPred pred = (UPred) term;
         if (pred.isPredKind(UPred.PredKind.FUNC) && isPredOfVarArg(pred)) {
-          for(Pair<UVar, UVar> pair : eqVars) {
+          for (Pair<UVar, UVar> pair : eqVars) {
             UVar left = pair.getLeft();
             UVar right = pair.getRight();
-            if(isUsingTuples(left, freeTuples)) {
+            if (isUsingTuples(left, freeTuples)) {
               pred.replaceVarInplace(right, left, false);
             } else {
               pred.replaceVarInplace(left, right, false);
@@ -666,20 +703,47 @@ public class SqlSolverSupport {
     return;
   }
 
+  private Set<UTerm> getSubTermsOtherThanVarEq(UMul t) {
+    Set<UTerm> terms = new HashSet<>();
+    for (UTerm sub : t.subTerms()) {
+      // [v1 = v2]
+      if (sub instanceof UPred pred
+              && pred.isPredKind(UPred.PredKind.EQ)
+              && pred.args().get(0).kind() == VAR
+              && pred.args().get(1).kind() == VAR) {
+        continue;
+      }
+      terms.add(sub);
+    }
+    return terms;
+  }
+
+  /* Whether the sets of subterms other than [v1 = v2] equal */
+  private boolean equalsExceptVarEqPreds(UMul t1, UMul t2) {
+    Set<UTerm> s1 = getSubTermsOtherThanVarEq(t1);
+    Set<UTerm> s2 = getSubTermsOtherThanVarEq(t2);
+    return s1.equals(s2);
+  }
+
   boolean instantiationWithPredicate(ArrayList<UTerm> sumList, HashSet<UVar> freeTuples, Set<UTerm> existingTerms) {
+
+    if (sumList.size() == 2 && allIsMult(sumList)) {
+      if (equalsExceptVarEqPreds((UMul) sumList.get(0), (UMul) sumList.get(1)))
+        return true;
+    }
 
     ArrayList<HashSet<UVar>> eqRels = collectPredicates(sumList);
     mergeEqRels(eqRels);
 //    if(eqRels.isEmpty())
 //      rewriteSumsWithIndPred(sumList, freeTuples, existingTerms);
     if (eqRels.isEmpty() && (sumList.size() > 1)) {
-      for(UTerm term : sumList) {
+      for (UTerm term : sumList) {
         ArrayList<UTerm> tmp = new ArrayList<>();
         tmp.add(term);
         instantiationWithPredicate(tmp, freeTuples, existingTerms);
       }
     }
-    if(eqRels.isEmpty() && !allIsMult(sumList)) {
+    if (eqRels.isEmpty() && !allIsMult(sumList)) {
       return false;
     }
     expandEqRelation(eqRels, sumList, existingTerms);
@@ -687,7 +751,7 @@ public class SqlSolverSupport {
 
     for (int i = 0; i < sumList.size(); ++i) {
       UTerm cur = sumList.get(i);
-      if(sumList.size() == 1) {
+      if (sumList.size() == 1) {
         rewriteSingleUTermWithEqRelation(cur, eqRels, targetTuples);
       } else {
         rewriteWithEqRelation(cur, eqRels, targetTuples);
@@ -698,14 +762,14 @@ public class SqlSolverSupport {
   }
 
   boolean instantiationWithTuple(ArrayList<UTerm> sumList, UVar commonTuple, HashSet<UVar> freeTuples) {
-    if(sumList.size() > 1)
+    if (sumList.size() > 1)
       return false;
-    for(UTerm t : sumList) {
-      if(t instanceof USum) {
+    for (UTerm t : sumList) {
+      if (t instanceof USum) {
         return false;
       }
     }
-    for(int i = 0; i < sumList.size(); ++ i) {
+    for (int i = 0; i < sumList.size(); ++ i) {
       sumList.set(i, instantiationOneSumWithTuple(sumList.get(i), commonTuple, freeTuples));
     }
     return true;
@@ -714,7 +778,7 @@ public class SqlSolverSupport {
 
   Set<UVar> collectBaseTuple(Set<UVar> tuples) {
     Set<UVar> baseTuples = new HashSet<>();
-    for(UVar v : tuples) {
+    for (UVar v : tuples) {
       switch (v.kind()) {
         case BASE -> {
           baseTuples.add(v);
@@ -736,8 +800,8 @@ public class SqlSolverSupport {
 
   UTerm instantiationOneSumWithTuple(UTerm body, UVar sumTuple, HashSet<UVar> freeTuples) {
     ArrayList<UTerm> terms = new ArrayList<>();
-    for(UVar v : freeTuples) {
-      if(v.equals(sumTuple)) {
+    for (UVar v : freeTuples) {
+      if (v.equals(sumTuple)) {
         continue;
       }
       terms.add(body.replaceVar(sumTuple, v,false).copy());
@@ -753,6 +817,8 @@ public class SqlSolverSupport {
       boolean instWithTuple,
       ArrayList<UTerm> sumList,
       ArrayList<String> sumVarList,
+      Set<Integer> sumIndexSet1,
+      Set<Integer> sumIndexSet2,
       HashMap<UTerm, String> termVarMap,
       HashSet<UVar> freeTuples
   ) {
@@ -760,26 +826,32 @@ public class SqlSolverSupport {
     ArrayList<UTerm> newSumList = new ArrayList<>();
     copySumList(sumList, newSumList);
 
-    UVar commonTuple = injectCommonTuple(newSumList);
+    UVar commonTuple;
+    commonTuple = matcher.injectCommonTuple(newSumList, sumIndexSet1, sumIndexSet2);
+
     alignSummation(newSumList, commonTuple);
     boolean flag = instantiationWithPredicate(newSumList, freeTuples, termVarMap.keySet());
-    mergeSameSum(newSumList);
+    unifyEqualSummations(newSumList);
     boolean ifInstWithTuple = false;
-    if(flag == false && instWithTuple == true) {
+    if (!flag && instWithTuple) {
       ifInstWithTuple = instantiationWithTuple(newSumList, commonTuple, freeTuples);
     }
 
     final ArrayList<UTerm> subSums = new ArrayList<>();
     final ArrayList<String> subVars = new ArrayList<>();
-    replaceSumsInList(newSumList, subSums, subVars);
+    Set<Integer> subSumIndexSet1 = new HashSet<>();
+    Set<Integer> subSumIndexSet2 = new HashSet<>();
+    replaceSumsInList(newSumList, sumIndexSet1, sumIndexSet2, subSums, subVars, subSumIndexSet1, subSumIndexSet2);
     Liastar constraints = null;
     ArrayList<String> innerVector = new ArrayList<>();
     HashSet<UVarTerm> isNullTuples = new HashSet<>();
+    Set<LiavarImpl> stringVars = new HashSet<>();
+    // equations
     for (int i = 0; i < sumVarList.size(); ++i) {
       String innerVarName = newUliaVarName();
       innerVector.add(innerVarName);
-      Liastar equation = transUexpWithoutSum(true, newSumList.get(i), termVarMap, isNullTuples);
-      if(ifInstWithTuple == true) {
+      Liastar equation = transUexpWithoutSum(true, newSumList.get(i), termVarMap, isNullTuples, stringVars);
+      if (ifInstWithTuple) {
         equation = Liastar.mkEq(true, Liastar.mkVar(true, sumVarList.get(i)), equation);
       } else {
         equation = Liastar.mkEq(true, Liastar.mkVar(true, innerVarName), equation);
@@ -790,19 +862,36 @@ public class SqlSolverSupport {
         constraints = Liastar.mkAnd(true, constraints, equation);
       }
     }
+    // IsNull constraints
     Liastar isNullConstraints = isNullCongruence(termVarMap, isNullTuples);
     if (isNullConstraints != null)
       constraints = Liastar.mkAnd(true, constraints, isNullConstraints);
     if (!subSums.isEmpty()) {
-      if(ifInstWithTuple == false) {
+      if (!ifInstWithTuple) {
         freeTuples.add(commonTuple);
       }
       constraints = mkAnd(true, constraints,
-          sumsToLiaStar(true, !ifInstWithTuple, subSums, subVars, termVarMap, freeTuples)
+          sumsToLiaStar(true, !ifInstWithTuple, subSums, subVars, subSumIndexSet1, subSumIndexSet2, termVarMap, freeTuples)
       );
     }
+    // string var constraints
+    Liastar stringVarConstraints = null;
+    Set<LiavarImpl> usedStringVars = new HashSet<>();
+    for (LiavarImpl v1 : stringVars) {
+      usedStringVars.add(v1);
+      for (LiavarImpl v2 : stringVars) {
+        if (!usedStringVars.contains(v2)) {
+          Liastar neq = Liastar.mkNot(true, Liastar.mkEq(true, v1, v2));
+          if (stringVarConstraints == null)
+            stringVarConstraints = neq;
+          else
+            stringVarConstraints = Liastar.mkAnd(true, stringVarConstraints, neq);
+        }
+      }
+    }
+    constraints = Liastar.mkAnd(true, constraints, stringVarConstraints);
 
-    if(ifInstWithTuple == true) {
+    if (ifInstWithTuple) {
       return constraints;
     } else {
       LiasumImpl result = (LiasumImpl) mkSum(isInner, sumVarList, innerVector, constraints);
@@ -878,209 +967,10 @@ public class SqlSolverSupport {
   }
  */
 
-  Pair<UVar, String> getCommonTupleName(List<UTerm> sums) {
-    UVar commonVar = null;
-    String commonTable = null;
-    for(int i = 0; i < sums.size(); ++ i) {
-      USum curSum = ((USum) sums.get(i));
-      for (UVar v : curSum.boundedVars()) {
-        if (commonVar == null) {
-          commonVar = v;
-          commonTable = findTableForTuple(curSum, commonVar);
-        } else {
-          String vName = v.toString();
-          String commonVarName = commonVar.toString();
-          if( (vName.length() < commonVarName.length()) ||
-              (vName.length() == commonVarName.length() && vName.compareTo(commonVarName) < 0) ) {
-            commonVar = v;
-            commonTable = findTableForTuple(curSum, commonVar);
-          }
-        }
-      }
-    }
-    Pair<UVar, String> result = new MutablePair<>(commonVar, commonTable);
-    return result;
-  }
-
   void copySumList(List<UTerm> sums, List<UTerm> newSums) {
-    for(int i = 0; i < sums.size(); ++ i) {
+    for (int i = 0; i < sums.size(); ++ i) {
       newSums.add(sums.get(i).copy());
     }
-  }
-
-  String findTableForTuple(UTerm expr, UVar tuple) {
-    switch (expr.kind()) {
-      case ADD: case MULTIPLY: {
-        for(UTerm term : expr.subTerms()) {
-          String tmp = findTableForTuple(term, tuple);
-          if (tmp != null) {
-            return tmp;
-          }
-        }
-        return null;
-      }
-      case SQUASH: {
-        return findTableForTuple(((USquash)expr).body(), tuple);
-      }
-      case NEGATION: {
-        return findTableForTuple(((UNeg)expr).body(), tuple);
-      }
-      case SUMMATION: {
-        return findTableForTuple(((USum)expr).body(), tuple);
-      }
-      case TABLE: {
-        UTable tmp = (UTable) expr;
-        if (tmp.var().equals(tuple)) {
-          return tmp.tableName().toString();
-        } else {
-          return null;
-        }
-      }
-      default: {
-        return null;
-      }
-    }
-  }
-
-  UTerm replaceTagetTupleFromOneSum(
-      USum cur,
-      UVar v,
-      UVar commonTupleNewName,
-      ArrayList<UVar> preVars) {
-
-    cur.boundedVars().remove(v);
-    cur.replaceVarInplace(v, commonTupleNewName, true);
-    if (cur.boundedVars().isEmpty()) {
-      preVars.add(v);
-      return cur.body().copy();
-    } else {
-      preVars.add(v);
-      return cur.copy();
-    }
-  }
-
-  UTerm injectTupleForOneUTerm(
-      USum cur,
-      UVar commonTuple,
-      UVar commonTupleNewName,
-      ArrayList<UVar> preVars,
-      ArrayList<String> selectedVarTables,
-      ArrayList<UTerm> preSums
-  ) {
-
-    Set<UVar> boundTuples = cur.boundedVars();
-    if (boundTuples.contains(commonTuple)) {
-      return replaceTagetTupleFromOneSum(cur, commonTuple, commonTupleNewName, preVars);
-    }
-
-    for(UVar v : boundTuples) {
-      if(preVars.contains(v)) {
-        return replaceTagetTupleFromOneSum(cur, v, commonTupleNewName, preVars);
-      }
-    }
-
-    for (String commonTable : selectedVarTables) {
-      HashSet<UVar> candidateVars = new HashSet<>();
-      for (UVar v : boundTuples) {
-        String tableName = findTableForTuple(cur.body(), v);
-        if (tableName == null) {
-          continue;
-        }
-        if (tableName.equals(commonTable)) {
-          candidateVars.add(v);
-        }
-      }
-
-      UVar v = null;
-      int maxScore = 0;
-      for(UVar tmp : candidateVars) {
-        USum curCopy = (USum) cur.copy();
-        UTerm expAfterInject = replaceTagetTupleFromOneSum(curCopy, tmp, commonTupleNewName, new ArrayList<>());
-        int score = computeScoreForInjectTuple(preSums, expAfterInject);
-
-        if(v == null) {
-          v = tmp;
-          maxScore = score;
-        } else {
-          if(score > maxScore) {
-            v = tmp;
-            maxScore = score;
-          }
-        }
-      }
-
-      if(v != null) {
-        return replaceTagetTupleFromOneSum(cur, v, commonTupleNewName, preVars);
-      }
-    }
-
-    UVar v = null;
-    int maxScore = 0;
-    for(UVar tmp : boundTuples) {
-      if(v == null) {
-        v = tmp;
-      } else {
-        USum curCopy = (USum) cur.copy();
-        UTerm expAfterInject = replaceTagetTupleFromOneSum(curCopy, v, commonTupleNewName, new ArrayList<>());
-        int score = computeScoreForInjectTuple(preSums, expAfterInject);
-        if(score > maxScore)
-          v = tmp;
-      }
-    }
-    selectedVarTables.add( findTableForTuple(cur.body(), v));
-    return replaceTagetTupleFromOneSum(cur, v, commonTupleNewName, preVars);
-  }
-
-  int computeScoreForInjectTuple(List<UTerm> sums, UTerm exp) {
-    int score = 0;
-    List<UTerm> thisTerms = null;
-    if(exp instanceof USum)
-      thisTerms = ((USum)exp).body().subTerms();
-    else if(exp instanceof UMul)
-      thisTerms = ((UMul)exp).subTerms();
-    else
-      return 0;
-
-    for(int i = 0; i < sums.size(); ++ i) {
-
-      List<UTerm> thatTerms = null;
-      UTerm thatExp = sums.get(i);
-      if(thatExp instanceof USum)
-        thatTerms = ((USum)thatExp).body().subTerms();
-      else if(thatExp instanceof UMul)
-        thatTerms = ((UMul)thatExp).subTerms();
-      else
-        thatTerms = new ArrayList<>();
-
-      for(UTerm t : thatTerms) {
-        score = thisTerms.contains(t) ? (score + 1) : score;
-      }
-    }
-
-    return score;
-  }
-
-  UVar injectCommonTuple(List<UTerm> sums) {
-    if (sums.isEmpty()) return null;
-
-    Pair<UVar, String> tmp = getCommonTupleName(sums);
-    UVar commonTuple = tmp.getLeft();
-    String commonTable = tmp.getRight();
-    UVar commonTupleNewName = UVar.mkBase(UName.mk(newUliaVarName()));
-
-    ArrayList<UVar> selectedVars = new ArrayList<>();
-    ArrayList<String> selectedVarTables = new ArrayList<>();
-    selectedVarTables.add(commonTable);
-    for (int i = 0; i < sums.size(); ++i) {
-      USum cur = (USum) sums.get(i);
-      ArrayList<UTerm> preSums = new ArrayList<>();
-      for(int j = 0; j < i; ++ j)
-        preSums.add(sums.get(j));
-
-      sums.set(i, injectTupleForOneUTerm(cur, commonTuple, commonTupleNewName, selectedVars, selectedVarTables, preSums));
-    }
-
-    return commonTupleNewName;
   }
 
   UVar dedupProjInVar(UVar v, boolean innerProj) {
@@ -1139,7 +1029,7 @@ public class SqlSolverSupport {
 
   static HashSet<Pair<UVar, UVar>> intersectEqRel(HashSet<Pair<UVar, UVar>> s1, HashSet<Pair<UVar, UVar>> s2) {
     HashSet<Pair<UVar, UVar>> result = new HashSet<>();
-    for(Pair<UVar, UVar> pair : s1) {
+    for (Pair<UVar, UVar> pair : s1) {
       UVar left = pair.getLeft();
       UVar right = pair.getRight();
       if (s2.contains(pair) || s2.contains(Pair.of(right, left))) {
@@ -1151,7 +1041,7 @@ public class SqlSolverSupport {
 
   static HashSet<Pair<UVar, UVar>> collectPredicatesFromOneTerm(UTerm curExp) {
     HashSet<Pair<UVar, UVar>> eqVars = new HashSet<>();
-    if(curExp instanceof USquash) {
+    if (curExp instanceof USquash) {
       curExp = ((USquash) curExp).body();
     }
     if (curExp instanceof UMul) {
@@ -1169,12 +1059,12 @@ public class SqlSolverSupport {
           eqVars.addAll(tmp);
         }
       }
-    } else if(curExp instanceof UAdd) {
+    } else if (curExp instanceof UAdd) {
       List<UTerm> subts = curExp.subTerms();
       HashSet<Pair<UVar, UVar>> eqRel = null;
       for (UTerm t : subts) {
         HashSet<Pair<UVar, UVar>> tmp = collectPredicatesFromOneTerm(t);
-        if(eqRel == null) {
+        if (eqRel == null) {
           eqRel = tmp;
         } else {
           eqRel = intersectEqRel(eqRel, tmp);
@@ -1190,7 +1080,7 @@ public class SqlSolverSupport {
     for (int i = 0; i < allEqVars.size(); ++i) {
       Set<Pair<UVar, UVar>> curEqs = allEqVars.get(i);
       for (int j = 0; j < allEqVars.size(); ++j) {
-        if(j == i) {
+        if (j == i) {
           continue;
         }
         Set<Pair<UVar, UVar>> thatEqs = allEqVars.get(j);
@@ -1211,8 +1101,8 @@ public class SqlSolverSupport {
 
   static HashSet<UVar> mergeSets(HashSet<UVar> set1, HashSet<UVar> set2) {
     HashSet<UVar> result = new HashSet<>();
-    for(UVar v : set1) {
-      if(set2.contains(v)) {
+    for (UVar v : set1) {
+      if (set2.contains(v)) {
         result.add(v);
       }
     }
@@ -1220,21 +1110,21 @@ public class SqlSolverSupport {
   }
 
   static ArrayList<HashSet<UVar>> mergeEqRels(ArrayList<HashSet<UVar>> rel1, ArrayList<HashSet<UVar>> rel2) {
-    if(rel1.size() > rel2.size()) {
+    if (rel1.size() > rel2.size()) {
       return mergeEqRels(rel2, rel1);
     }
     ArrayList<HashSet<UVar>> result = new ArrayList<>();
-    for(HashSet<UVar> thisSet : rel1) {
+    for (HashSet<UVar> thisSet : rel1) {
       HashSet<UVar> target = null;
-      for(HashSet<UVar> thatSet : rel2) {
+      for (HashSet<UVar> thatSet : rel2) {
         HashSet<UVar> tmp = mergeSets(thisSet, thatSet);
-        if(tmp.size() > 1) {
+        if (tmp.size() > 1) {
           target = thatSet;
           result.add(tmp);
           break;
         }
       }
-      if(target != null) {
+      if (target != null) {
         rel2.remove(target);
       }
     }
@@ -1244,11 +1134,11 @@ public class SqlSolverSupport {
 
 
   static ArrayList<HashSet<UVar>> analyseEqRels(ArrayList<Set<Pair<UVar, UVar>>> allEqVars) {
-    if(allEqVars.isEmpty()) {
+    if (allEqVars.isEmpty()) {
       return new ArrayList<>();
     }
     ArrayList<HashSet<UVar>> result = buildEqRelation(allEqVars.get(0));
-    for(int i = 1; i < allEqVars.size(); ++ i) {
+    for (int i = 1; i < allEqVars.size(); ++ i) {
       ArrayList<HashSet<UVar>> tmp = buildEqRelation(allEqVars.get(i));
       result = mergeEqRels(result, tmp);
     }
@@ -1282,23 +1172,48 @@ public class SqlSolverSupport {
 //    return true;
 //  }
 
-  void replaceSumsInList(List<UTerm> sums, List<UTerm> subSums, List<String> subVars) {
-    HashMap<USum, String> sumMap = new HashMap<>();
-    for (int i = 0; i < sums.size(); ++i) {
-      sums.set(i, replaceSummations(sumMap, sums.get(i)));
+  /**
+   * Given a list of terms ("list") and two sets ("indices1" and "indices2")
+   * that include references (integers) to those terms,
+   * replace summations in the terms with lia vars,
+   * output the mapping to two lists ("subSums" and "subVars")
+   * and two new sets ("subSumIndices1" and "subSumIndices2")
+   * so that each summation that occurs in a term referenced by "indicesN"
+   * is in "subSumIndicesN".
+   */
+  void replaceSumsInList(
+      List<UTerm> list,
+      Set<Integer> indices1, Set<Integer> indices2,
+      List<UTerm> subSums, List<String> subVars,
+      Set<Integer> subSumIndices1, Set<Integer> subSumIndices2) {
+    Map<USum, String> sumMap = new HashMap<>();
+    Set<USum> subSums1 = new HashSet<>(), subSums2 = new HashSet<>();
+    for (int i = 0; i < list.size(); ++i) {
+      // For each term, replace summations within it
+      Set<USum> tmpSumSet = new HashSet<>();
+      list.set(i, replaceSummations(sumMap, tmpSumSet, list.get(i)));
+      // collect replaced summations on both sides
+      if (indices1.contains(i)) subSums1.addAll(tmpSumSet);
+      if (indices2.contains(i)) subSums2.addAll(tmpSumSet);
     }
-    subSums.addAll(sumMap.keySet());
-    for (int i = 0; i < subSums.size(); ++i) {
-      subVars.add(sumMap.get(subSums.get(i)).toString());
+    // convert map into two lists (keys and values)
+    for (Map.Entry<USum, String> entry : sumMap.entrySet()) {
+      subSums.add(entry.getKey());
+      subVars.add(entry.getValue());
     }
+    // turn a summation set to an index set so that:
+    //   if i is in subSumIndices2N,
+    //   then subSums[i] is a summation in queryN (N = 1 or 2)
+    subSumIndices1.addAll(subSums1.stream().map(subSums::indexOf).collect(Collectors.toSet()));
+    subSumIndices2.addAll(subSums2.stream().map(subSums::indexOf).collect(Collectors.toSet()));
   }
 
-  UTerm replaceSummations(HashMap<USum, String> sumMap, UTerm uexp) {
+  UTerm replaceSummations(Map<USum, String> sumMap,
+                          Set<USum> sums, UTerm uexp) {
     switch (uexp.kind()) {
       case SUMMATION:
-        for (UTerm t : sumMap.keySet()) {
-          if (t.equals(uexp)) return ULiaVar.mk(sumMap.get(t));
-        }
+        sums.add((USum) uexp);
+        if (sumMap.containsKey(uexp)) return ULiaVar.mk(sumMap.get(uexp));
         final String sumName = newUliaVarName();
         final ULiaVar newVar = ULiaVar.mk(sumName);
         sumMap.put((USum) uexp, sumName);
@@ -1307,7 +1222,7 @@ public class SqlSolverSupport {
         final List<UTerm> subTerms = uexp.subTerms();
         final List<UTerm> newSubTerms = new ArrayList<>();
         for (UTerm t : subTerms) {
-          newSubTerms.add(replaceSummations(sumMap, t));
+          newSubTerms.add(replaceSummations(sumMap, sums, t));
         }
         return switch (uexp.kind()) {
           case MULTIPLY -> UMul.mk(newSubTerms);
@@ -1317,29 +1232,29 @@ public class SqlSolverSupport {
         };
       }
       case NEGATION:
-        return UNeg.mk(replaceSummations(sumMap, ((UNeg) uexp).body()));
+        return UNeg.mk(replaceSummations(sumMap, sums, ((UNeg) uexp).body()));
       case SQUASH:
-        return USquash.mk(replaceSummations(sumMap, ((USquash) uexp).body()));
+        return USquash.mk(replaceSummations(sumMap, sums, ((USquash) uexp).body()));
       default:
         return uexp;
     }
   }
 
   void alignSummation(List<UTerm> sums, UVar commonTuple) {
-    if(sums.size() <= 1)
+    if (sums.size() <= 1)
       return;
 
-    for(int i = 0; i < sums.size(); ++ i) {
+    for (int i = 0; i < sums.size(); ++i) {
       UTerm term = sums.get(i);
-      if(term instanceof UMul && term.subTerms().size() == 1) {
+      if (term instanceof UMul && term.subTerms().size() == 1) {
         sums.set(i, term.subTerms().get(0));
       }
     }
 
     boolean hasSquashSum = false;
     boolean hasNoSquashSum = false;
-    for(UTerm t : sums) {
-      if(t instanceof USquash && ((USquash) t).body() instanceof USum) {
+    for (UTerm t : sums) {
+      if (t instanceof USquash && ((USquash) t).body() instanceof USum) {
         hasSquashSum = true;
       }
       else if (t instanceof USquash && !(((USquash) t).body() instanceof USum)) {
@@ -1347,19 +1262,18 @@ public class SqlSolverSupport {
       }
     }
 
-    if(hasSquashSum && hasNoSquashSum) {
+    if (hasSquashSum && hasNoSquashSum) {
       for (int i = 0; i < sums.size(); ++i) {
         UTerm term = sums.get(i);
-        if(term instanceof USquash && ((USquash) term).body() instanceof USum) {
-          UTerm alignedTerm = splitSummation(((USquash) term).body());
-          if(alignedTerm instanceof UMul) {
-            for (int j = 0; j < alignedTerm.subTerms().size(); ++ j) {
+        if (term instanceof USquash squash && squash.body() instanceof USum sum) {
+          UTerm alignedTerm = splitSummation(sum);
+          if (alignedTerm instanceof UMul) {
+            for (int j = 0; j < alignedTerm.subTerms().size(); ++j) {
               UTerm t = alignedTerm.subTerms().get(j);
-              if(t instanceof USum && ((USum) t).boundedVars().size() == 1) {
-                USum tmp = (USum)t;
+              if (t instanceof USum tmp && tmp.boundedVars().size() == 1) {
                 UVar bVar = new ArrayList<>(tmp.boundedVars()).get(0);
                 UTerm body = tmp.body();
-                alignedTerm.subTerms().set(j, UAdd.mk(tmp.copy(), body.replaceVar(bVar, commonTuple,false)));
+                alignedTerm.subTerms().set(j, UAdd.mk(tmp.copy(), body.replaceVar(bVar, commonTuple, false)));
                 break;
               }
             }
@@ -1549,23 +1463,34 @@ public class SqlSolverSupport {
     return prevEnumRelations;
   }
 
+  Liastar transUexpWithoutSum(boolean innerStar,
+                              UTerm exp,
+                              Map<UTerm, String> uTermToLiaVar,
+                              HashSet<UVarTerm> isnullTuples) {
+    return transUexpWithoutSum(innerStar, exp, uTermToLiaVar, isnullTuples, null);
+  }
+
   // summations in exp have been replaced by new variables
   // Then transUexpWithoutSum translates exp into LIA formula
   // uTermToLiaVar is used to replace the same terms with same variables
-  Liastar transUexpWithoutSum(boolean innerStar, UTerm exp, Map<UTerm, String> uTermToLiaVar, HashSet<UVarTerm> isnullTuples) {
+  Liastar transUexpWithoutSum(boolean innerStar,
+                              UTerm exp,
+                              Map<UTerm, String> uTermToLiaVar,
+                              HashSet<UVarTerm> isnullTuples,
+                              Set<LiavarImpl> stringVars) {
     switch (exp.kind()) {
       case SUMMATION -> throw new UnsupportedOperationException("should not have summation when transforming to Lia!");
       case ADD -> {
         Liastar result = null;
         final List<UTerm> subTerms = exp.subTerms();
         for (UTerm t : subTerms) {
-          Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples);
+          Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples, stringVars);
           curLia = curLia.simplifyIte();
-          if(result == null) {
+          if (result == null) {
             result = curLia;
-          } else if(result instanceof LiaiteImpl) {
+          } else if (result instanceof LiaiteImpl) {
             result = ((LiaiteImpl)result).plusIte(curLia);
-          } else if(curLia instanceof LiaiteImpl) {
+          } else if (curLia instanceof LiaiteImpl) {
             result = ((LiaiteImpl)curLia).plusIte(result);
           } else {
             result = Liastar.mkPlus(innerStar, result, curLia);
@@ -1578,10 +1503,10 @@ public class SqlSolverSupport {
         final List<UTerm> subTerms = exp.subTerms();
         Liastar iteNonzeroCond = null;
         for (UTerm t : subTerms) {
-          Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples);
+          Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples, stringVars);
           Liastar[] condOpArray = new Liastar[2];
           boolean hasZeroIte = ishasZeroIte(innerStar, curLia, condOpArray);
-          if(hasZeroIte) {
+          if (hasZeroIte) {
             Liastar cond = condOpArray[0];
             Liastar op = condOpArray[1];
             iteNonzeroCond = (iteNonzeroCond == null) ? cond : mkAnd(innerStar, iteNonzeroCond, cond);
@@ -1594,8 +1519,8 @@ public class SqlSolverSupport {
             }
           }
         }
-        if(iteNonzeroCond != null) {
-          if(result == null) {
+        if (iteNonzeroCond != null) {
+          if (result == null) {
             result = mkConst(innerStar, 1);
           }
           result = mkIte(innerStar, iteNonzeroCond, result, mkConst(innerStar, 0));
@@ -1607,7 +1532,7 @@ public class SqlSolverSupport {
         final Liastar cond =
             Liastar.mkEq(
                 innerStar,
-                transUexpWithoutSum(innerStar, body, uTermToLiaVar, isnullTuples),
+                transUexpWithoutSum(innerStar, body, uTermToLiaVar, isnullTuples, stringVars),
                 Liastar.mkConst(innerStar, 0));
         return exp.kind() == NEGATION
             ? Liastar.mkIte(innerStar, cond, Liastar.mkConst(innerStar, 1), Liastar.mkConst(innerStar, 0))
@@ -1640,8 +1565,8 @@ public class SqlSolverSupport {
               Liastar.mkConst(innerStar, 1));
         } else if (pred.isBinaryPred()) {
           // Case 3. [U-expr0 <binary op> U-expr1]
-          final Liastar liaVar0 = transUexpWithoutSum(innerStar, pred.args().get(0), uTermToLiaVar, isnullTuples);
-          final Liastar liaVar1 = transUexpWithoutSum(innerStar, pred.args().get(1), uTermToLiaVar, isnullTuples);
+          final Liastar liaVar0 = transUexpWithoutSum(innerStar, pred.args().get(0), uTermToLiaVar, isnullTuples, stringVars);
+          final Liastar liaVar1 = transUexpWithoutSum(innerStar, pred.args().get(1), uTermToLiaVar, isnullTuples, stringVars);
           final Liastar target = switch (pred.predKind()) {
             case EQ -> Liastar.mkEq(innerStar, liaVar0, liaVar1);
             case NEQ -> Liastar.mkNot(innerStar, Liastar.mkEq(innerStar, liaVar0, liaVar1));
@@ -1658,18 +1583,31 @@ public class SqlSolverSupport {
       }
       case VAR, STRING -> {
         final String varName = uTermToLiaVar.computeIfAbsent(exp, v -> newUliaVarName());
-        return Liastar.mkVar(innerStar, varName);
+        LiavarImpl var = (LiavarImpl) Liastar.mkVar(innerStar, varName);
+        if (exp instanceof UString && stringVars != null) stringVars.add(var);
+        return var;
       }
       case FUNC -> {
         UFunc func = (UFunc) exp;
         String funcName = func.funcName().toString();
+        // in_list_N
+        if (PredefinedFunctions.belongsToFamily(func, PredefinedFunctions.NAME_IN_LIST)) {
+          List<Liastar> liaOps = new ArrayList<>();
+          List<UTerm> args = exp.subTerms();
+          for (UTerm arg : args) {
+            Liastar liaOp = transUexpWithoutSum(innerStar, arg, uTermToLiaVar, isnullTuples, stringVars);
+            liaOps.add(liaOp);
+          }
+          return Liastar.mkFunc(innerStar, funcName, liaOps);
+        }
+        // other functions
         switch (funcName) {
           case "divide": {
             Liastar result = null;
             final List<UTerm> subTerms = exp.subTerms();
             for (UTerm t : subTerms) {
-              Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples);
-              if(result == null) {
+              Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples, stringVars);
+              if (result == null) {
                 result = curLia;
               } else {
                 result = Liastar.mkDiv(innerStar, result, curLia);
@@ -1680,28 +1618,42 @@ public class SqlSolverSupport {
           case "sqrt": {
             assert exp.subTerms().size() == 1;
             UTerm operand = exp.subTerms().get(0);
-            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples);
+            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples, stringVars);
             return Liastar.mkFunc(innerStar, "sqrt", liaOp);
           }
           case "minus": {
             assert exp.subTerms().size() == 2;
             UTerm op0 = exp.subTerms().get(0);
             UTerm op1 = exp.subTerms().get(1);
-            Liastar liaOp0 = transUexpWithoutSum(innerStar, op0, uTermToLiaVar, isnullTuples);
-            Liastar liaOp1 = transUexpWithoutSum(innerStar, op1, uTermToLiaVar, isnullTuples);
+            Liastar liaOp0 = transUexpWithoutSum(innerStar, op0, uTermToLiaVar, isnullTuples, stringVars);
+            Liastar liaOp1 = transUexpWithoutSum(innerStar, op1, uTermToLiaVar, isnullTuples, stringVars);
             return Liastar.mkFunc(innerStar, "minus", List.of(liaOp0, liaOp1));
           }
           case "`upper`", "upper": {
             assert exp.subTerms().size() == 1;
             UTerm operand = exp.subTerms().get(0);
-            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples);
+            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples, stringVars);
             return Liastar.mkFunc(innerStar, "upper", liaOp);
           }
           case "`lower`", "lower": {
             assert exp.subTerms().size() == 1;
             UTerm operand = exp.subTerms().get(0);
-            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples);
+            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples, stringVars);
             return Liastar.mkFunc(innerStar, "lower", liaOp);
+          }
+          case "`year`", "year": {
+            assert exp.subTerms().size() == 1;
+            UTerm operand = exp.subTerms().get(0);
+            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples, stringVars);
+            return Liastar.mkFunc(innerStar, "year", liaOp);
+          }
+          case PredefinedFunctions.NAME_LIKE: {
+            assert exp.subTerms().size() == 2;
+            UTerm op0 = exp.subTerms().get(0);
+            UTerm op1 = exp.subTerms().get(1);
+            Liastar liaOp0 = transUexpWithoutSum(innerStar, op0, uTermToLiaVar, isnullTuples, stringVars);
+            Liastar liaOp1 = transUexpWithoutSum(innerStar, op1, uTermToLiaVar, isnullTuples, stringVars);
+            return Liastar.mkFunc(innerStar, PredefinedFunctions.NAME_LIKE, List.of(liaOp0, liaOp1));
           }
           default: {
             throw new UnsupportedOperationException("unsupported function: " + funcName);

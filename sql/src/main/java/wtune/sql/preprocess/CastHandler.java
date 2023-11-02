@@ -17,11 +17,8 @@ public class CastHandler {
 
   private static Schema schema;
 
-  public static void setSchema(Schema s) {
-    schema = s;
-  }
-
   public static String handle(String sql) {
+    schema = SqlNodePreprocess.getSchema();
     sql = ConvertCastIntegerToSigned(sql);
     sql = CastRemover.removeUselessCastNull(sql);
     sql = removeUselessCastSigned(sql);

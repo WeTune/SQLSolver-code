@@ -58,30 +58,7 @@ public class Rewriter {
     return parse;
   }
 
-  private String newAliasVar() {
-    return aliasPrefix+(aliasNumber++);
-  }
-
-  private String newAliasTable() {
-    return tableAliasPrefix+(tableAliasNumber++);
-  }
-
-  private boolean isAggregateFunc(SqlNode sqlNode) {
-    return sqlNode.getKind() == SqlKind.COUNT ||
-            sqlNode.getKind() == SqlKind.MAX ||
-            sqlNode.getKind() == SqlKind.MIN ||
-            sqlNode.getKind() == SqlKind.SUM ||
-            sqlNode.getKind() == SqlKind.AVG;
-  }
-
-  private boolean isArithmetical(SqlNode sqlNode) {
-    return sqlNode.getKind() == SqlKind.PLUS ||
-            sqlNode.getKind() == SqlKind.MINUS ||
-            sqlNode.getKind() == SqlKind.TIMES ||
-            sqlNode.getKind() == SqlKind.DIVIDE;
-  }
-
-  private SqlNode asOperatorFirstOperand(SqlNode sqlNode) {
+  public static SqlNode asOperatorFirstOperand(SqlNode sqlNode) {
     if (sqlNode.getKind() == SqlKind.AS) {
       final SqlBasicCall basicCall = (SqlBasicCall) sqlNode;
       assert basicCall.getOperandList().size() == 2;
@@ -91,6 +68,41 @@ public class Rewriter {
       return firstOperand;
     }
     return null;
+  }
+
+  public static SqlNode asOperatorSecondOperand(SqlNode sqlNode) {
+    if (sqlNode.getKind() == SqlKind.AS) {
+      final SqlBasicCall basicCall = (SqlBasicCall) sqlNode;
+      assert basicCall.getOperandList().size() == 2;
+      final SqlNode firstOperand = basicCall.getOperandList().get(0);
+      final SqlNode secondOperandNode = basicCall.getOperandList().get(1);
+      assert secondOperandNode instanceof SqlIdentifier;
+      return secondOperandNode;
+    }
+    return null;
+  }
+
+  public static boolean isAggregateFunc(SqlNode sqlNode) {
+    return sqlNode.getKind() == SqlKind.COUNT ||
+            sqlNode.getKind() == SqlKind.MAX ||
+            sqlNode.getKind() == SqlKind.MIN ||
+            sqlNode.getKind() == SqlKind.SUM ||
+            sqlNode.getKind() == SqlKind.AVG;
+  }
+
+  public static boolean isArithmetical(SqlNode sqlNode) {
+    return sqlNode.getKind() == SqlKind.PLUS ||
+            sqlNode.getKind() == SqlKind.MINUS ||
+            sqlNode.getKind() == SqlKind.TIMES ||
+            sqlNode.getKind() == SqlKind.DIVIDE;
+  }
+
+  private String newAliasVar() {
+    return aliasPrefix+(aliasNumber++);
+  }
+
+  private String newAliasTable() {
+    return tableAliasPrefix+(tableAliasNumber++);
   }
 
   private String operatorSymbol(SqlKind kind) throws Exception{
@@ -301,12 +313,13 @@ public class Rewriter {
     throw new Exception("unhandled case");
   }
 
+  /** for select list are all agg * */
   private Boolean isAggGroupByCase(SqlNode node) {
     if(node.getKind() == SqlKind.SELECT) {
       final SqlSelect sqlSelect = (SqlSelect) node;
       final SqlNodeList selectList = sqlSelect.getSelectList();
       final SqlNodeList groupBys = sqlSelect.getGroup();
-      Boolean flag = false;
+      boolean flag = false;
       for(final SqlNode select : selectList) {
         if(select.getKind() == SqlKind.AS) {
           final SqlNode firstOperand = asOperatorFirstOperand(select);

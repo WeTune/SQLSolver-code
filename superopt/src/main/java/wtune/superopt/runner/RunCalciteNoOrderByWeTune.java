@@ -75,7 +75,8 @@ public class RunCalciteNoOrderByWeTune implements Runner {
     outDir = parentDir.resolve("run" + subDirSuffix);
     outOpt = outDir.resolve("1_query.tsv");
 
-    app = App.of("calcite_test");
+    String appName = args.getOptional("A", "app", String.class, "calcite_test");
+    app = App.of(appName);
     target = args.getOptional("T", "task", String.class, "all");
     verbosity = args.getOptional("v", "verbose", int.class, 0);
 

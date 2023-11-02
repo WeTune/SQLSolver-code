@@ -1,5 +1,9 @@
 package wtune.superopt.uexpr;
 
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.CommAssocUexpUtils;
+import wtune.superopt.util.SetMatching;
+
 import java.util.*;
 
 import static wtune.common.utils.Commons.joining;
@@ -76,10 +80,75 @@ final class UAddImpl implements UAdd {
   }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    final List<UTerm> replaced = transformTerms(factors, t -> t.replaceAtomicTermExcept(baseTerm, repTerm, exceptTerm));
+    return new UAddImpl(replaced);
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     final List<UTerm> replaced = transformTerms(factors, t -> t.replaceAtomicTerm(baseTerm, repTerm));
     return new UAddImpl(replaced);
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    int bound = factors.size();
+    if (bound == 0) return;
+    factors.get(0).prettyPrint(printer);
+    for (int i = 1; i < bound; i++) {
+      printer.println();
+      printer.print("+ ");
+      printer.indent(2);
+      factors.get(i).prettyPrint(printer);
+      printer.indent(-2);
+    }
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    if (factors.size() > 1) return true;
+    if (factors.size() == 0) return false;
+    return factors.get(0).isPrettyPrintMultiLine();
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    int size = factors.size();
+    int[] hashes = new int[size + 1];
+    for (int i = 0; i < size; i++) {
+      hashes[i] = factors.get(i).hashForSort(varHash);
+    }
+    hashes[size] = "+".hashCode();
+    return Arrays.hashCode(hashes);
+  }
+
+  @Override
+  public void sortCommAssocItems() {
+    for (UTerm term : factors) {
+      term.sortCommAssocItems();
+    }
+    factors.sort(Comparator.comparingInt(UTerm::hashForSort));
+  }
+
+  @Override
+  public Set<String> getFVs() {
+    Set<String> fvs = new HashSet<>();
+    for (UTerm factor : factors) {
+      fvs.addAll(factor.getFVs());
+    }
+    return fvs;
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    if (that instanceof UAdd add) {
+      return CommAssocUexpUtils.groupSimilarVariables(factors, add.subTerms(), matching);
+    }
+    return false;
   }
 
   @Override

@@ -1,8 +1,11 @@
 package wtune.superopt.uexpr;
 
-import java.util.List;
+import wtune.superopt.util.AbstractPrettyPrinter;
+import wtune.superopt.util.SetMatching;
 
-import static wtune.superopt.uexpr.UExprSupport.transformTerms;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 record UNegImpl(UTerm body) implements UNeg {
   @Override
@@ -32,10 +35,55 @@ record UNegImpl(UTerm body) implements UNeg {
   }
 
   @Override
+  public UTerm replaceAtomicTermExcept(UTerm baseTerm, UTerm repTerm, UTerm exceptTerm) {
+    assert baseTerm.kind().isTermAtomic();
+    if (this.equals(exceptTerm)) return this;
+    final UTerm replaced = body.replaceAtomicTermExcept(baseTerm, repTerm, exceptTerm);
+    return new UNegImpl(replaced);
+  }
+
+  @Override
   public UTerm replaceAtomicTerm(UTerm baseTerm, UTerm repTerm) {
     assert baseTerm.kind().isTermAtomic();
     final UTerm replaced = body.replaceAtomicTerm(baseTerm, repTerm);
     return new UNegImpl(replaced);
+  }
+
+  @Override
+  public void prettyPrint(AbstractPrettyPrinter printer) {
+    printer.print("not(");
+    printer.indent(4);
+    body.prettyPrint(printer);
+    printer.indent(-4);
+    printer.print(")");
+  }
+
+  @Override
+  public boolean isPrettyPrintMultiLine() {
+    return body.isPrettyPrintMultiLine();
+  }
+
+  @Override
+  public int hashForSort(Map<String, Integer> varHash) {
+    return Objects.hash(body.hashForSort(varHash), "-");
+  }
+
+  @Override
+  public void sortCommAssocItems() {
+    body.sortCommAssocItems();
+  }
+
+  @Override
+  public Set<String> getFVs() {
+    return body.getFVs();
+  }
+
+  @Override
+  public boolean groupSimilarVariables(UTerm that, SetMatching<String> matching) {
+    if (that instanceof UNeg neg) {
+      return body.groupSimilarVariables(neg.body(), matching);
+    }
+    return false;
   }
 
   @Override

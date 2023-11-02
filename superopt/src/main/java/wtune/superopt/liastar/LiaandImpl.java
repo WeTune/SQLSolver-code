@@ -1,10 +1,10 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.util.PrettyBuilder;
 
-import java.util.ArrayList;import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
+import java.util.function.Function;
 
 
 public class LiaandImpl extends Liastar {
@@ -18,6 +18,20 @@ public class LiaandImpl extends Liastar {
     innerStar = false;
   }
 
+  private void flattenFormula(List<Liastar> operands, Liastar f) {
+    if (f instanceof LiaandImpl and) {
+      and.flatten(operands);
+    } else {
+      operands.add(f);
+    }
+  }
+
+  /** Flatten an "AND" tree into a list of its leaves. */
+  public void flatten(List<Liastar> operands) {
+    flattenFormula(operands, operand1);
+    flattenFormula(operands, operand2);
+  }
+
   @Override
   public Set<String> collectVarSet() {
     Set<String> varSet = operand1.collectVarSet();
@@ -26,8 +40,17 @@ public class LiaandImpl extends Liastar {
   }
 
   @Override
-  public String toString() {
-    return "(" + operand1.toString() + "/\\" + operand2.toString() + ")";
+  protected void prettyPrint(PrettyBuilder builder) {
+    boolean needsParen1 = (operand1 instanceof LiaorImpl);
+    boolean needsParen2 = (operand2 instanceof LiaorImpl);
+    prettyPrintBinaryOp(builder, operand1, operand2,
+            needsParen1, needsParen2, true, " /\\ ");
+  }
+
+  @Override
+  protected boolean isPrettyPrintMultiLine() {
+    return operand1.isPrettyPrintMultiLine()
+            || operand2.isPrettyPrintMultiLine();
   }
 
   @Override
@@ -209,6 +232,20 @@ public class LiaandImpl extends Liastar {
     operand1 = operand1.subformulaWithoutStar();
     operand2 = operand2.subformulaWithoutStar();
     return this;
+  }
+
+  @Override
+  public int embeddingLayers() {
+    int leftLayer = operand1.embeddingLayers();
+    int rightLayer = operand2.embeddingLayers();
+    return (leftLayer > rightLayer) ? leftLayer : rightLayer;
+  }
+
+  @Override
+  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
+    Liastar operand10 = operand1.transformPostOrder(transformer);
+    Liastar operand20 = operand2.transformPostOrder(transformer);
+    return transformer.apply(mkAnd(innerStar, operand10, operand20));
   }
 
 }
