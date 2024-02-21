@@ -1,38 +1,39 @@
 package wtune.superopt.liastar;
 
 import com.microsoft.z3.*;
+import wtune.superopt.liastar.transformer.LiaTransformer;
 import wtune.superopt.logic.LogicSupport;
-import wtune.superopt.logic.SqlSolver;
 import wtune.superopt.util.PrettyBuilder;
 
 import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
-import static wtune.common.utils.IterableSupport.all;import static wtune.common.utils.IterableSupport.any;
+import static wtune.common.utils.IterableSupport.any;
 
 
-public class LiasumImpl extends Liastar {
+public class LiaSumImpl extends LiaStar {
 
   ArrayList<String> outerVector;
   ArrayList<String> innerVector;
-  Liastar constraints;
+  LiaStar constraints;
 
-  LiasumImpl() {
+  LiaSumImpl() {
     outerVector = new ArrayList<>();
     innerVector = new ArrayList<>();
     constraints = null;
   }
 
   @Override
-  public Liastar mergeMult(HashMap<LiamultImpl, String> multToVar) {
-    HashMap<LiamultImpl, String> curMap = new HashMap<>();
+  public LiaStar mergeMult(HashMap<LiaMulImpl, String> multToVar) {
+    HashMap<LiaMulImpl, String> curMap = new HashMap<>();
     constraints = constraints.mergeMult(curMap);
-    for(LiamultImpl l : curMap.keySet()) {
-      Liastar result = (LiavarImpl) mkVar(true, curMap.get(l));
+    for(LiaMulImpl l : curMap.keySet()) {
+      LiaStar result = (LiaVarImpl) mkVar(true, curMap.get(l));
       Set<String> vars = l.collectVarSet();
       for(String v : vars) {
-        Liastar cur = (LiavarImpl) mkVar(true, v);
-        Liastar newconstr = mkEq(true, cur, mkConst(true, 0));
+        LiaStar cur = (LiaVarImpl) mkVar(true, v);
+        LiaStar newconstr = mkEq(true, cur, mkConst(true, 0));
         newconstr = mkNot(true, newconstr);
         newconstr = mkOr(true, newconstr,
             mkEq(true, result, mkConst(true, 0)));
@@ -40,13 +41,13 @@ public class LiasumImpl extends Liastar {
       }
 
       // (v1 !=0 /\ ... /\ vn !=0) -> (v != 0)
-      Liastar eqzeroConstr = null;
+      LiaStar eqzeroConstr = null;
       for(String v : vars) {
-        Liastar cur = (LiavarImpl) mkVar(true, v);
-        Liastar newconstr = mkEq(true, cur, mkConst(true, 0));
+        LiaStar cur = (LiaVarImpl) mkVar(true, v);
+        LiaStar newconstr = mkEq(true, cur, mkConst(true, 0));
         eqzeroConstr = (eqzeroConstr == null) ? newconstr : mkOr(true, eqzeroConstr, newconstr);
       }
-      Liastar resultNotzero = mkNot(true, mkEq(true, result, mkConst(true, 0)));
+      LiaStar resultNotzero = mkNot(true, mkEq(true, result, mkConst(true, 0)));
       constraints = mkAnd(true, constraints, mkOr(true, eqzeroConstr, resultNotzero) );
     }
     updateInnerVector();
@@ -54,7 +55,7 @@ public class LiasumImpl extends Liastar {
     return this;
   }
 
-  LiasumImpl(ArrayList<String> v1, ArrayList<String> v2, Liastar c) {
+  LiaSumImpl(ArrayList<String> v1, ArrayList<String> v2, LiaStar c) {
     outerVector = v1;
     innerVector = v2;
     constraints = c;
@@ -103,7 +104,7 @@ public class LiasumImpl extends Liastar {
   }
 
   @Override
-  public Liastar deepcopy() {
+  public LiaStar deepcopy() {
     ArrayList<String> v1 = new ArrayList<>();
     v1.addAll(outerVector);
 
@@ -117,13 +118,20 @@ public class LiasumImpl extends Liastar {
   public Set<String> collectVarSet() {
     return new HashSet<>(outerVector);
   }
-  
+
   @Override
-  public Liastar multToBin(int n) {
+  public Set<String> collectAllVars() {
+    Set<String> varSet = constraints.collectAllVars();
+    varSet.addAll(outerVector);
+    return varSet;
+  }
+
+  @Override
+  public LiaStar multToBin(int n) {
     Set<String> varSet = constraints.collectVarSet();
     int upperBound = 1 << n - 1;
     for(String v : varSet) {
-      Liastar boundCond = mkLe(true, mkVar(true, v), mkConst(true, upperBound));
+      LiaStar boundCond = mkLe(true, mkVar(true, v), mkConst(true, upperBound));
       constraints = mkAnd(true, constraints, boundCond);
     }
     constraints = constraints.multToBin(n);
@@ -174,10 +182,10 @@ public class LiasumImpl extends Liastar {
   }
 
   @Override
-  public Liastar simplifyMult(HashMap<Liastar, String> multToVar) {
+  public LiaStar simplifyMult(HashMap<LiaStar, String> multToVar) {
     constraints.innerStar = true;
 
-    Liastar tmp = constraints.simplifyMult(multToVar);
+    LiaStar tmp = constraints.simplifyMult(multToVar);
     if(tmp != null)
       constraints = mkAnd(true, constraints, tmp);
 
@@ -213,19 +221,42 @@ public class LiasumImpl extends Liastar {
     return sls;
   }
 
-  @Override
-  public Liastar expandStar() throws Exception {
-    constraints = constraints.expandStar();
-    updateInnerVector();
-    try {
-      SemiLinearSet sls = getsls();
-      return sls.tranToLiastar(outerVector);
-    } catch (Exception e) {
-      if (LogicSupport.dumpLiaFormulas) {
-        System.out.println(e);
-      }
-      return nativeExpandstar();
+  /**
+   * Expand stars with assistance of an extra constraint.
+   * If the extra constraint contradicts with <code>this</code>,
+   * it may return a LIA formula representing "false" quickly.
+   */
+  public LiaStar expandStarWithExtraConstraint(LiaStar extra) {
+    // destruct constraints into terms connected by AND
+    List<LiaStar> terms = new ArrayList<>();
+    if (constraints instanceof LiaAndImpl and) {
+      and.flatten(terms);
+    } else {
+      terms.add(constraints);
     }
+    // separate terms with/without star
+    LiaStar termLia = null;
+    LiaStar termNonLia = null;
+    for (LiaStar term : terms) {
+      if (term.isLia()) {
+        termLia = mkAnd(innerStar, termLia, term);
+      } else {
+        termNonLia = mkAnd(innerStar, termNonLia, term);
+      }
+    }
+    // expand stars in terms with star
+    if (termNonLia != null) {
+      termNonLia = termNonLia.expandStar();
+    }
+    constraints = mkAnd(innerStar, termLia, termNonLia);
+    updateInnerVector();
+    // transform to LIA
+    return new LiaTransformer().transform(extra, outerVector, innerVector, termLia, termNonLia);
+  }
+
+  @Override
+  public LiaStar expandStar() {
+    return expandStarWithExtraConstraint(mkTrue(innerStar));
   }
 
 //  static void findExpForVar(Liastar formula, HashMap<String, Liastar> expOfVars) {
@@ -276,7 +307,7 @@ public class LiasumImpl extends Liastar {
 //  }
 
   @Override
-  public Expr transToSMT(Context ctx, HashMap<String, IntExpr> varsName) {
+  public Expr transToSMT(Context ctx, Map<String, IntExpr> varsName, Map<String, FuncDecl> funcsName) {
     System.err.println("there should not be star");
     assert false;
     return null;
@@ -342,9 +373,9 @@ public class LiasumImpl extends Liastar {
       return true;
     if(that == null)
       return false;
-    if(!(that instanceof LiasumImpl))
+    if(!(that instanceof LiaSumImpl))
       return false;
-    LiasumImpl tmp = (LiasumImpl) that;
+    LiaSumImpl tmp = (LiaSumImpl) that;
     return outerVector.equals(tmp.outerVector) && innerVector.equals(tmp.innerVector) && constraints.equals(tmp.constraints);
   }
 
@@ -375,18 +406,18 @@ public class LiasumImpl extends Liastar {
   }
 
   boolean classifyConjunction(
-      Liastar formula,
+      LiaStar formula,
       HashSet<String> params,
       HashSet<String> varsWithoutParam,
-      ArrayList<Liastar> conjWithoutParam,
+      ArrayList<LiaStar> conjWithoutParam,
       HashSet<String> varsWithParam,
-      ArrayList<Liastar> conjWithParam
+      ArrayList<LiaStar> conjWithParam
   ) {
 
     HashSet<String> varsWithoutParam2 = new HashSet<>();
-    ArrayList<Liastar> conjWithoutParam2 = new ArrayList<>();
+    ArrayList<LiaStar> conjWithoutParam2 = new ArrayList<>();
     HashSet<String> varsWithParam2 = new HashSet<>();
-    ArrayList<Liastar> conjWithParam2 = new ArrayList<>();
+    ArrayList<LiaStar> conjWithParam2 = new ArrayList<>();
 
     boolean b = classifyConjunction2(false, formula, params, varsWithoutParam2, conjWithoutParam2, varsWithParam2, conjWithParam2);
     if(b == false) {
@@ -403,19 +434,19 @@ public class LiasumImpl extends Liastar {
 
   boolean classifyConjunction2(
       boolean flag,
-      Liastar formula,
+      LiaStar formula,
       HashSet<String> params,
       HashSet<String> varsWithoutParam,
-      ArrayList<Liastar> conjWithoutParam,
+      ArrayList<LiaStar> conjWithoutParam,
       HashSet<String> varsWithParam,
-      ArrayList<Liastar> conjWithParam
+      ArrayList<LiaStar> conjWithParam
   ) {
     HashSet<String> importantInnerVar = getImportantInnerVars();
-    ArrayList<Liastar> literals = new ArrayList<>();
+    ArrayList<LiaStar> literals = new ArrayList<>();
     decomposeConjunction(formula, literals);
-    Liastar formulaWithoutParams = null;
-    Liastar formulaWithParams = null;
-    for(Liastar lit : literals) {
+    LiaStar formulaWithoutParams = null;
+    LiaStar formulaWithParams = null;
+    for(LiaStar lit : literals) {
       Set<String> vars = lit.collectVarSet();
       if(overLap(vars, params) || (flag && !overLap(vars, importantInnerVar))) {
         if(overLap(vars, varsWithoutParam)) {
@@ -440,15 +471,15 @@ public class LiasumImpl extends Liastar {
   }
 
   boolean classifyConjunctions(
-      Liastar formula,
+      LiaStar formula,
       HashSet<String> params,
       HashSet<String> varsWithoutParam,
-      ArrayList<Liastar> conjWithoutParam,
+      ArrayList<LiaStar> conjWithoutParam,
       HashSet<String> varsWithParam,
-      ArrayList<Liastar> conjWithParam
+      ArrayList<LiaStar> conjWithParam
   ) {
-    ArrayList<Liastar> conjunctions = decomposeDNF(formula);
-    for(Liastar conj : conjunctions) {
+    ArrayList<LiaStar> conjunctions = decomposeDNF(formula);
+    for(LiaStar conj : conjunctions) {
       if(!classifyConjunction(conj, params, varsWithoutParam, conjWithoutParam, varsWithParam, conjWithParam)) {
         return false;
       }
@@ -461,48 +492,48 @@ public class LiasumImpl extends Liastar {
     return true;
   }
 
-  Liastar buildLinearCombLia(ArrayList<String> result, ArrayList<ArrayList<String>> vectors) {
-    Liastar formula = null;
+  LiaStar buildLinearCombLia(ArrayList<String> result, ArrayList<ArrayList<String>> vectors) {
+    LiaStar formula = null;
     for(int i = 0; i < result.size(); ++ i) {
-      Liastar sum = null;
+      LiaStar sum = null;
       for(int j = 0; j < vectors.size(); ++ j) {
-        Liastar var = mkVar(innerStar, vectors.get(j).get(i));
+        LiaStar var = mkVar(innerStar, vectors.get(j).get(i));
         sum = (sum == null) ? var : mkPlus(innerStar, sum, var);
       }
-      Liastar equation = mkEq(innerStar, mkVar(innerStar, result.get(i)), sum);
+      LiaStar equation = mkEq(innerStar, mkVar(innerStar, result.get(i)), sum);
       formula = (formula == null) ? equation : mkAnd(innerStar, formula, equation);
     }
     assert (formula != null);
     return formula;
   }
 
-  Liastar zeroVectorLia(ArrayList<String> vector) {
-    Liastar result = null;
+  LiaStar zeroVectorLia(ArrayList<String> vector) {
+    LiaStar result = null;
     for(String var : vector) {
-      Liastar tmp = mkEq(innerStar, mkVar(innerStar, var), mkConst(innerStar, 0));
+      LiaStar tmp = mkEq(innerStar, mkVar(innerStar, var), mkConst(innerStar, 0));
       result = (result == null) ? tmp : mkAnd(innerStar, result, tmp);
     }
     return result;
   }
 
-  Liastar buildOneVectorLia(
+  LiaStar buildOneVectorLia(
       ArrayList<String> xs,
       HashSet<String> ys,
-      Liastar conjWithoutParam,
-      Liastar conjWithParam
+      LiaStar conjWithoutParam,
+      LiaStar conjWithParam
   ) {
-    Liastar right = zeroVectorLia(xs);
+    LiaStar right = zeroVectorLia(xs);
 
     ArrayList<String> curOuterVector = new ArrayList<>(xs);
     ArrayList<String> curInnerVector = new ArrayList<>(innerVector);
-    Liastar curConstraint = conjWithoutParam.deepcopy();
+    LiaStar curConstraint = conjWithoutParam.deepcopy();
     curConstraint.innerStar = innerStar;
-    LiasumImpl star = (LiasumImpl) mkSum(innerStar, curOuterVector, curInnerVector, curConstraint);
+    LiaSumImpl star = (LiaSumImpl) mkSum(innerStar, curOuterVector, curInnerVector, curConstraint);
     star.updateInnerVector();
 
-    Liastar paramLia = replaceParams(conjWithParam, ys, new HashMap<>());
+    LiaStar paramLia = replaceParams(conjWithParam, ys, new HashMap<>());
 
-    Liastar left = mkAnd(innerStar, star, paramLia);
+    LiaStar left = mkAnd(innerStar, star, paramLia);
 
     return mkOr(innerStar, left, right);
   }
@@ -517,27 +548,27 @@ public class LiasumImpl extends Liastar {
     return result;
   }
 
-  Liastar buildVectorsLia(
+  LiaStar buildVectorsLia(
       ArrayList<ArrayList<String>> newVectors,
       HashSet<String> ys,
-      ArrayList<Liastar> conjsWithoutParam,
-      ArrayList<Liastar> conjsWithParam
+      ArrayList<LiaStar> conjsWithoutParam,
+      ArrayList<LiaStar> conjsWithParam
   ) {
-    Liastar result = null;
+    LiaStar result = null;
     for(int i = 0; i < newVectors.size(); ++ i) {
       ArrayList<String> vector = newVectors.get(i);
-      Liastar conjWithutParam = conjsWithoutParam.get(i);
-      Liastar conjWithParam = conjsWithParam.get(i);
-      Liastar tmp = buildOneVectorLia(vector, ys, conjWithutParam, conjWithParam);
+      LiaStar conjWithutParam = conjsWithoutParam.get(i);
+      LiaStar conjWithParam = conjsWithParam.get(i);
+      LiaStar tmp = buildOneVectorLia(vector, ys, conjWithutParam, conjWithParam);
       result = (result == null) ? tmp : mkAnd(innerStar, result, tmp);
     }
     return result;
   }
 
-  Liastar moveoutParams(
+  LiaStar moveoutParams(
       HashSet<String> ys,
-      ArrayList<Liastar> conjWithoutParam,
-      ArrayList<Liastar> conjWithParam
+      ArrayList<LiaStar> conjWithoutParam,
+      ArrayList<LiaStar> conjWithParam
   ) {
     ArrayList<ArrayList<String>> newVectors = new ArrayList<>();
     for(int i = 0; i < conjWithParam.size(); ++ i) {
@@ -547,7 +578,7 @@ public class LiasumImpl extends Liastar {
         newVector.add(newVarName());
       }
     }
-    Liastar result = buildLinearCombLia(outerVector, newVectors);
+    LiaStar result = buildLinearCombLia(outerVector, newVectors);
 
     result = mkAnd(innerStar, result, buildVectorsLia(newVectors, ys, conjWithoutParam, conjWithParam));
     return result;
@@ -575,22 +606,22 @@ public class LiasumImpl extends Liastar {
     for (int i = 0; i < numOfVectos; ++ i) {
       String[] names = new String[numOfNames];
       for (int j = 0; j < numOfNames; ++ j)
-        names[j] = Liastar.newVarName();
+        names[j] = LiaStar.newVarName();
       newOuterVars.add(names);
     }
     return newOuterVars;
   }
 
-  Liastar eqVectorsSum(ArrayList<String> left, ArrayList<String[]> rights) {
-    ArrayList<Liastar> formulas = new ArrayList<>();
+  LiaStar eqVectorsSum(ArrayList<String> left, ArrayList<String[]> rights) {
+    ArrayList<LiaStar> formulas = new ArrayList<>();
     for (String leftVar : left) {
-      Liastar tmp = null;
-      LiavarImpl leftLVar = (LiavarImpl) Liastar.mkVar(innerStar, leftVar);
+      LiaStar tmp = null;
+      LiaVarImpl leftLVar = (LiaVarImpl) LiaStar.mkVar(innerStar, leftVar);
       for (String[] rightVars : rights) {
-        LiavarImpl rightLVar = (LiavarImpl) Liastar.mkVar(innerStar, rightVars[0]);
-        tmp = (tmp == null) ? rightLVar : Liastar.mkPlus(innerStar, tmp, rightLVar);
+        LiaVarImpl rightLVar = (LiaVarImpl) LiaStar.mkVar(innerStar, rightVars[0]);
+        tmp = (tmp == null) ? rightLVar : LiaStar.mkPlus(innerStar, tmp, rightLVar);
       }
-      tmp = Liastar.mkEq(innerStar, leftLVar, tmp);
+      tmp = LiaStar.mkEq(innerStar, leftLVar, tmp);
       formulas.add(tmp);
     }
     return constructConjunctions(innerStar, formulas);
@@ -604,22 +635,22 @@ public class LiasumImpl extends Liastar {
     return result;
   }
 
-  private static Liastar removeParamsFromConjunction(
-      boolean innerStar, String[] outerVector, ArrayList<String> innerVector, Liastar conjunction, HashSet<String> params) {
+  private static LiaStar removeParamsFromConjunction(
+          boolean innerStar, String[] outerVector, ArrayList<String> innerVector, LiaStar conjunction, HashSet<String> params) {
 
-    ArrayList<Liastar> literals = new ArrayList<>();
+    ArrayList<LiaStar> literals = new ArrayList<>();
     decomposeConjunction(conjunction, literals);
     HashSet<String> varsOutStar = new HashSet<>(params);
     HashSet<String> varsUnderStar = new HashSet<>(innerVector);
     ArrayList<String> varsMustUnderStar = firstNElements(outerVector.length, innerVector);
-    ArrayList<Liastar> literalsOutStar = new ArrayList<>();
-    ArrayList<Liastar> literalsUnderStar = literals;
+    ArrayList<LiaStar> literalsOutStar = new ArrayList<>();
+    ArrayList<LiaStar> literalsUnderStar = literals;
     boolean modified = false;
     do {
       modified = false;
-      ArrayList<Liastar> movedLiterals = new ArrayList<>();
+      ArrayList<LiaStar> movedLiterals = new ArrayList<>();
       HashSet<String> movedVars = new HashSet<>();
-      for (Liastar l : literalsUnderStar) {
+      for (LiaStar l : literalsUnderStar) {
         Set<String> varSet = l.collectVarSet();
         if (any(varSet, s -> varsOutStar.contains(s))) {
           movedLiterals.add(l);
@@ -639,18 +670,18 @@ public class LiasumImpl extends Liastar {
 
     ArrayList<String> newOuterVars = new ArrayList();
     newOuterVars.addAll(Arrays.stream(outerVector).toList());
-    Liastar newConstraints = constructConjunctions(innerStar, literalsUnderStar);
+    LiaStar newConstraints = constructConjunctions(innerStar, literalsUnderStar);
     ArrayList<String> newInnerVars = new ArrayList(varsMustUnderStar);
     for (String v : newConstraints.collectVarSet()) {
       if (!newInnerVars.contains(v))
         newInnerVars.add(v);
     }
-    Liastar sum = Liastar.mkSum(innerStar, newOuterVars, newInnerVars, newConstraints);
+    LiaStar sum = LiaStar.mkSum(innerStar, newOuterVars, newInnerVars, newConstraints);
 
-    Liastar eqzero = allOuterVarEqZero(newOuterVars);
-    Liastar existsProp = constructConjunctions(innerStar, literalsOutStar);
-    Liastar result = (literalsOutStar.isEmpty()) ? Liastar.mkAnd(innerStar, sum, existsProp) :
-        Liastar.mkOr(innerStar, eqzero, Liastar.mkAnd(innerStar, sum, existsProp));
+    LiaStar eqzero = allOuterVarEqZero(newOuterVars);
+    LiaStar existsProp = constructConjunctions(innerStar, literalsOutStar);
+    LiaStar result = (literalsOutStar.isEmpty()) ? LiaStar.mkAnd(innerStar, sum, existsProp) :
+        LiaStar.mkOr(innerStar, eqzero, LiaStar.mkAnd(innerStar, sum, existsProp));
 
     HashSet<String> exceptVars = new HashSet<>();
     exceptVars.addAll(params);
@@ -661,18 +692,18 @@ public class LiasumImpl extends Liastar {
   }
 
 
-  private Liastar removeParamsFromConjunctions(ArrayList<Liastar> conjunctions, HashSet<String> params) {
+  private LiaStar removeParamsFromConjunctions(ArrayList<LiaStar> conjunctions, HashSet<String> params) {
     if (conjunctions.isEmpty())
       return null;
 
     ArrayList<String[]> newOuterVectors = newOuterVarNames(conjunctions.size(), outerVector.size());
-    Liastar eqFormula = eqVectorsSum(outerVector, newOuterVectors);
+    LiaStar eqFormula = eqVectorsSum(outerVector, newOuterVectors);
 
-    ArrayList<Liastar> results = new ArrayList<>();
+    ArrayList<LiaStar> results = new ArrayList<>();
     results.add(eqFormula);
     for (int i = 0; i < conjunctions.size(); ++ i) {
       String[] newOuterVector = newOuterVectors.get(i);
-      Liastar tmp = removeParamsFromConjunction(innerStar, newOuterVector, innerVector, conjunctions.get(i), params);
+      LiaStar tmp = removeParamsFromConjunction(innerStar, newOuterVector, innerVector, conjunctions.get(i), params);
       if (tmp == null) {
         return null;
       } else {
@@ -684,7 +715,7 @@ public class LiasumImpl extends Liastar {
 
 
   @Override
-  public Liastar removeParameter() {
+  public LiaStar removeParameter() {
     HashSet<String> params = collectParams();
     if (LogicSupport.dumpLiaFormulas)
       System.out.println("remove param for" + constraints);
@@ -710,17 +741,17 @@ public class LiasumImpl extends Liastar {
 
     try {
       setDnfStartTime();
-      Liastar tmpConst = constraints.deepcopy();
+      LiaStar tmpConst = constraints.deepcopy();
       tmpConst = paramLiaStar2DNF(tmpConst, true);
       if (LogicSupport.dumpLiaFormulas)
         System.out.println("dnf is" + tmpConst);
-      ArrayList<Liastar> conjunctions = decomposeDNF(tmpConst);
+      ArrayList<LiaStar> conjunctions = decomposeDNF(tmpConst);
       tmpConst = simplifyDNF(tmpConst);
 
       HashSet<String> varsWithParam = new HashSet<>();
       HashSet<String> varsWithoutParam = new HashSet<>();
-      ArrayList<Liastar> conjWithParam = new ArrayList<>();
-      ArrayList<Liastar> conjWithoutParam = new ArrayList<>();
+      ArrayList<LiaStar> conjWithParam = new ArrayList<>();
+      ArrayList<LiaStar> conjWithoutParam = new ArrayList<>();
       boolean canSolve = classifyConjunctions(tmpConst, params, varsWithoutParam, conjWithoutParam, varsWithParam, conjWithParam);
       if (canSolve == true) {
         return moveoutParams(buildYs(varsWithParam, params), conjWithoutParam, conjWithParam);
@@ -743,7 +774,7 @@ public class LiasumImpl extends Liastar {
 
 
   @Override
-  public Liastar removeParameterEager() {
+  public LiaStar removeParameterEager() {
     HashSet<String> params = collectParams();
     if (LogicSupport.dumpLiaFormulas)
       System.out.println("eager remove param for" + constraints);
@@ -763,14 +794,14 @@ public class LiasumImpl extends Liastar {
 
     try {
       setDnfStartTime();
-      Liastar tmpConst = constraints.deepcopy();
+      LiaStar tmpConst = constraints.deepcopy();
       tmpConst = paramLiaStar2DNF(tmpConst, true);
       if (LogicSupport.dumpLiaFormulas)
         System.out.println("eager dnf is" + tmpConst);
-      ArrayList<Liastar> conjunctions = decomposeDNF(tmpConst);
+      ArrayList<LiaStar> conjunctions = decomposeDNF(tmpConst);
       tmpConst = simplifyDNF(tmpConst);
 
-      Liastar result = removeParamsFromConjunctions(decomposeDNF(tmpConst), params);
+      LiaStar result = removeParamsFromConjunctions(decomposeDNF(tmpConst), params);
       if (result != null) {
         return result;
       } else {
@@ -792,24 +823,22 @@ public class LiasumImpl extends Liastar {
 
 
   @Override
-  public Liastar simplifyIte() {
+  public LiaStar simplifyIte() {
     constraints = constraints.simplifyIte();
     return this;
   }
 
   @Override
-  public Liastar pushUpParameter(HashSet<String> newVars) {
+  public LiaStar pushUpParameter(HashSet<String> newVars) {
     HashSet<String> newInnerVars = new HashSet<>();
     constraints.pushUpParameter(newInnerVars);
-    for(String var : newInnerVars) {
-      innerVector.add(var);
-    }
+    innerVector.addAll(newInnerVars);
     mergeParameterIte();
 
-    Liastar newFormula = this;
-    for(int i = 0; i < outerVector.size(); ++ i) {
-      Liastar tmp = pushUpParameterForOneOutVar(i, newVars, constraints);
-      if(tmp != null) {
+    LiaStar newFormula = this;
+    for (int i = 0; i < outerVector.size(); i++) {
+      LiaStar tmp = pushUpParameterForOneOutVar(i, newVars, constraints);
+      if (tmp != null) {
         newFormula = mkAnd(innerStar, newFormula, tmp.deepcopy());
       }
     }
@@ -817,82 +846,58 @@ public class LiasumImpl extends Liastar {
     return newFormula.deepcopy();
   }
 
-  Liastar pushUpParameterForOneOutVar(int index, HashSet<String> newVars, Liastar formula) {
+  private LiaStar pushUpParameterForOneOutVar(int index, Set<String> newVars, LiaStar formula) {
     switch (formula.getType()) {
       case LAND: {
-        Liastar tmp = pushUpParameterForOneOutVar(index, newVars, ((LiaandImpl)formula).operand1);
-        if (tmp != null) {
-          return tmp;
-        } else {
-          return pushUpParameterForOneOutVar(index, newVars, ((LiaandImpl)formula).operand2);
-        }
+        final LiaStar eq1 = pushUpParameterForOneOutVar(index, newVars, ((LiaAndImpl)formula).operand1);
+        final LiaStar eq2 = pushUpParameterForOneOutVar(index, newVars, ((LiaAndImpl)formula).operand2);
+        return mkAnd(innerStar, eq1, eq2);
       }
       case LEQ: {
-        String innerVar = innerVector.get(index);
-        Liastar left = ((LiaeqImpl) formula).operand1;
-        Liastar right = ((LiaeqImpl) formula).operand2;
-        if(left instanceof LiavarImpl && right instanceof LiaiteImpl) {
-          LiavarImpl leftVar = (LiavarImpl) left;
-          if(!leftVar.varName.equals(innerVar)) {
-            return null;
-          }
-          LiaiteImpl rightIte = (LiaiteImpl) right;
-          if(!(rightIte.operand2 instanceof LiaconstImpl)) {
-            return null;
-          }
-          if( ((LiaconstImpl)rightIte.operand2).value != 0 ) {
-            return null;
-          }
-
-
-
-
-          Liastar paramMult = null;
-          if (rightIte.operand1 instanceof LiamultImpl) {
-            HashSet<Liastar> items = new HashSet<>();
-            decomposeMults((LiamultImpl) rightIte.operand1, items);
-            Liastar innerMult = null;
-            for (Liastar op2 : items) {
-              if (op2 instanceof LiavarImpl && !innerVector.contains(op2.toString())) {
-                paramMult = (paramMult == null) ? op2.deepcopy() : mkMult(true, paramMult, op2.deepcopy());
-              } else {
-                innerMult = (innerMult == null) ? op2.deepcopy() : mkMult(true, innerMult, op2.deepcopy());
-              }
-            }
-            rightIte.operand1 = (innerMult == null) ? mkConst(true, 1) : innerMult;
-          }
-
-
-
-
-          Liastar[] conds = new Liastar[2];
-          conds[0] = null;
-          conds[1] = null;
-          decomposeConditions(rightIte.cond, conds);
-          if(conds[1] == null) {
-            return null;
-          } else {
-            if (conds[0] != null) {
-              rightIte.cond = conds[0].deepcopy();
-            } else {
-              ((LiaeqImpl) formula).operand2 = rightIte.operand1;
-            }
-            String newOutVar = newVarName();
-            newVars.add(newOutVar);
-            String oldOutVar = outerVector.get(index);
-            outerVector.set(index, newOutVar);
-            if (paramMult == null)
-              return mkEq(innerStar,
-                  mkVar(innerStar, oldOutVar),
-                  mkIte(innerStar, conds[1].deepcopy(), mkVar(innerStar, newOutVar), mkConst(innerStar, 0))
-              );
-            else
-              return mkEq(innerStar,
-                  mkVar(innerStar, oldOutVar),
-                  mkIte(innerStar, conds[1].deepcopy(), mkMult(innerStar, paramMult, mkVar(innerStar, newOutVar)), mkConst(innerStar, 0))
-              );
-          }
+        // recognize equations like "innerVector[index] = expression"
+        final String innerVar = innerVector.get(index);
+        final LiaEqImpl equation = (LiaEqImpl) formula;
+        final LiaStar left = equation.operand1;
+        final LiaStar right = equation.operand2;
+        final LiaStar exp;
+        boolean varOnLeft = true;
+        if (left instanceof LiaVarImpl var && innerVar.equals(var.varName)) {
+          exp = right;
+        } else if (right instanceof LiaVarImpl var && innerVar.equals(var.varName)) {
+          exp = left;
+          varOnLeft = false;
+        } else {
+          return null;
         }
+        // the expression should be in certain form
+        LiaStar[] result;
+        if (exp instanceof LiaVarImpl || exp instanceof LiaMulImpl) {
+          // innerVar = v1 * ... * vN
+          result = pushUpParameterInIte(index, null, exp, newVars);
+        } else if (exp instanceof LiaIteImpl ite) {
+          if (!(ite.operand2 instanceof LiaConstImpl)) {
+            return null;
+          }
+          if (((LiaConstImpl) ite.operand2).value != 0) {
+            return null;
+          }
+          // innerVar = ite(..., ..., 0)
+          result = pushUpParameterInIte(index, ite.cond, ite.operand1, newVars);
+        } else {
+          return null;
+        }
+        // case: no param is pushed up
+        if (result == null) {
+          return null;
+        }
+        // otherwise, update exp with result[1]
+        if (varOnLeft) {
+          equation.operand2 = result[1];
+        } else {
+          equation.operand1 = result[1];
+        }
+        // return the part of exp pushed up
+        return result[0];
       }
       default: {
         return null;
@@ -900,10 +905,66 @@ public class LiasumImpl extends Liastar {
     }
   }
 
-  void decomposeConditions(Liastar cond, Liastar[] condArray) {
-    if (cond instanceof LiaandImpl) {
-      decomposeConditions(((LiaandImpl)cond).operand1, condArray);
-      decomposeConditions(((LiaandImpl)cond).operand2, condArray);
+  // Given
+  // (...u...) in {(...u'...) |
+  //   u' = ite(condition, trueValue, 0) /\ ...
+  // }*
+  // where u is outerVector[varIndex] and u' is innerVector[varIndex],
+  // try to push up parameters in condition and trueValue.
+  // Return [paramExp, updatedIte]
+  // where paramExp is the part of expression pushed up outside the star
+  // and updatedIte is the remaining part of ite.
+  private LiaStar[] pushUpParameterInIte(int varIndex, LiaStar condition, LiaStar trueValue, Set<String> newVars) {
+    final LiaStar newCondition0, newTrueValue0; // the updated ite
+    final LiaStar newCondition1, newTrueValue1; // pushed up
+
+    // push up parameters in trueValue
+    final Set<LiaStar> items = new HashSet<>();
+    decomposeMults(trueValue, items);
+    LiaStar paramMult = null, innerMult = null;
+    for (LiaStar item : items) {
+      if (item instanceof LiaVarImpl v && !innerVector.contains(v.varName)) {
+        paramMult = (paramMult == null) ? item.deepcopy() : mkMult(true, paramMult, item.deepcopy());
+      } else {
+        innerMult = (innerMult == null) ? item.deepcopy() : mkMult(true, innerMult, item.deepcopy());
+      }
+    }
+    newTrueValue0 = (innerMult == null) ? mkConst(true, 1) : innerMult;
+
+    // push up parameters in newCondition
+    LiaStar[] conds = new LiaStar[2];
+    conds[0] = null;
+    conds[1] = null;
+    if (condition != null) {
+      decomposeConditions(condition, conds);
+    }
+    if (paramMult == null && conds[1] == null) {
+      // no param is pushed up; stay unchanged
+      return null;
+    }
+    newCondition0 = conds[0];
+    newCondition1 = conds[1];
+    final String newOutVarName = newVarName();
+    final LiaStar newOutVar = mkVar(innerStar, newOutVarName);
+    newTrueValue1 = (paramMult == null) ? newOutVar : mkMult(innerStar, paramMult, newOutVar);
+
+    // construct the result
+    final LiaStar oldOutVar = mkVar(innerStar, outerVector.get(varIndex));
+    final LiaStar ite1 = newCondition1 == null ? newTrueValue1 :
+            mkIte(innerStar, newCondition1, newTrueValue1, mkConst(innerStar, 0));
+    final LiaStar paramExp = mkEq(innerStar, oldOutVar, ite1);
+    final LiaStar updatedIte = newCondition0 == null ? newTrueValue0 :
+            mkIte(innerStar, newCondition0, newTrueValue0, mkConst(innerStar, 0));
+    // update states
+    newVars.add(newOutVarName);
+    outerVector.set(varIndex, newOutVarName);
+    return new LiaStar[]{paramExp, updatedIte};
+  }
+
+  private void decomposeConditions(LiaStar cond, LiaStar[] condArray) {
+    if (cond instanceof LiaAndImpl) {
+      decomposeConditions(((LiaAndImpl)cond).operand1, condArray);
+      decomposeConditions(((LiaAndImpl)cond).operand2, condArray);
     } else {
       Set<String> vars = cond.collectVarSet();
       for(String var : vars) {
@@ -925,19 +986,19 @@ public class LiasumImpl extends Liastar {
     return innerVector.contains(name);
   }
 
-  HashMap<LiavarImpl, Liastar> findParamVars(ArrayList<Liastar> literals) {
-    HashMap<LiavarImpl, Liastar> result = new HashMap<>();
+  HashMap<LiaVarImpl, LiaStar> findParamVars(ArrayList<LiaStar> literals) {
+    HashMap<LiaVarImpl, LiaStar> result = new HashMap<>();
     for(int i = 0; i < literals.size(); ++ i) {
-      Liastar lit = literals.get(i);
-      if(lit instanceof LiaeqImpl) {
-        LiaeqImpl equation = (LiaeqImpl) lit;
-        if(equation.operand1 instanceof LiavarImpl && equation.operand2 instanceof LiaiteImpl) {
-          LiavarImpl var = (LiavarImpl) equation.operand1;
-          LiaiteImpl ite = (LiaiteImpl) equation.operand2;
-          Liastar iteCond = ite.cond;
-          Liastar iteOp1 = ite.operand1;
-          Liastar iteOp2 = ite.operand2;
-          if(notOutInnverVar(var.varName) && iteOp2.equals(mkConst(innerStar, 0)) && (iteOp1 instanceof LiavarImpl)) {
+      LiaStar lit = literals.get(i);
+      if(lit instanceof LiaEqImpl) {
+        LiaEqImpl equation = (LiaEqImpl) lit;
+        if(equation.operand1 instanceof LiaVarImpl && equation.operand2 instanceof LiaIteImpl) {
+          LiaVarImpl var = (LiaVarImpl) equation.operand1;
+          LiaIteImpl ite = (LiaIteImpl) equation.operand2;
+          LiaStar iteCond = ite.cond;
+          LiaStar iteOp1 = ite.operand1;
+          LiaStar iteOp2 = ite.operand2;
+          if(notOutInnverVar(var.varName) && iteOp2.equals(mkConst(innerStar, 0)) && (iteOp1 instanceof LiaVarImpl)) {
             Set<String> condVars = iteCond.collectVarSet();
             if(!overLap(condVars, new HashSet<>(innerVector)) && existsOnlyInIteOrEq(literals, var.varName)) {
               result.put(var, ite);
@@ -950,18 +1011,18 @@ public class LiasumImpl extends Liastar {
     return result;
   }
 
-  Liastar replaceNotZeroCondInItecond(Liastar iteCond, HashMap<LiavarImpl, Liastar> paramNotZeroCond) {
-    if (iteCond instanceof LiaandImpl) {
-      LiaandImpl tmp = (LiaandImpl) iteCond;
+  LiaStar replaceNotZeroCondInItecond(LiaStar iteCond, HashMap<LiaVarImpl, LiaStar> paramNotZeroCond) {
+    if (iteCond instanceof LiaAndImpl) {
+      LiaAndImpl tmp = (LiaAndImpl) iteCond;
       tmp.operand1 = replaceNotZeroCondInItecond(tmp.operand1, paramNotZeroCond);
       tmp.operand2 = replaceNotZeroCondInItecond(tmp.operand2, paramNotZeroCond);
-    } else if (iteCond instanceof LianotImpl)  {
-      Liastar body = ((LianotImpl)iteCond).operand;
-      if(body instanceof LiaeqImpl) {
-        Liastar left = ((LiaeqImpl)body).operand1;
-        Liastar right = ((LiaeqImpl)body).operand2;
+    } else if (iteCond instanceof LiaNotImpl)  {
+      LiaStar body = ((LiaNotImpl)iteCond).operand;
+      if(body instanceof LiaEqImpl) {
+        LiaStar left = ((LiaEqImpl)body).operand1;
+        LiaStar right = ((LiaEqImpl)body).operand2;
         if(paramNotZeroCond.containsKey(left) && right.equals(mkConst(innerStar, 0))) {
-          LiaiteImpl tmpIte = (LiaiteImpl) paramNotZeroCond.get(left).deepcopy();
+          LiaIteImpl tmpIte = (LiaIteImpl) paramNotZeroCond.get(left).deepcopy();
           return mkAnd(
               innerStar, tmpIte.cond,
               mkNot(innerStar, mkEq(innerStar, tmpIte.operand1, mkConst(innerStar, 0)))
@@ -972,22 +1033,22 @@ public class LiasumImpl extends Liastar {
     return iteCond;
   }
 
-  void replaceNotZeroCondInLit(Liastar literal, HashMap<LiavarImpl, Liastar> paramNotZeroCond) {
-    if(literal instanceof LiaeqImpl) {
-      LiaeqImpl equation = (LiaeqImpl) literal;
-      Liastar eqOp1 = equation.operand1;
-      Liastar eqOp2 = equation.operand2;
-      if(eqOp2 instanceof LiaiteImpl) {
-        LiaiteImpl right = (LiaiteImpl) ((LiaeqImpl)literal).operand2;
+  void replaceNotZeroCondInLit(LiaStar literal, HashMap<LiaVarImpl, LiaStar> paramNotZeroCond) {
+    if(literal instanceof LiaEqImpl) {
+      LiaEqImpl equation = (LiaEqImpl) literal;
+      LiaStar eqOp1 = equation.operand1;
+      LiaStar eqOp2 = equation.operand2;
+      if(eqOp2 instanceof LiaIteImpl) {
+        LiaIteImpl right = (LiaIteImpl) ((LiaEqImpl)literal).operand2;
         right.cond = replaceNotZeroCondInItecond(right.cond, paramNotZeroCond);
-      } else if(eqOp1 instanceof LiavarImpl && paramNotZeroCond.containsKey(eqOp2)){
+      } else if(eqOp1 instanceof LiaVarImpl && paramNotZeroCond.containsKey(eqOp2)){
         equation.operand2 = paramNotZeroCond.get(eqOp2);
       }
     }
   }
 
-  void replaceNotZeroCond(ArrayList<Liastar> literals, HashMap<LiavarImpl, Liastar> paramNotZeroCond) {
-    for(Liastar lit : literals) {
+  void replaceNotZeroCond(ArrayList<LiaStar> literals, HashMap<LiaVarImpl, LiaStar> paramNotZeroCond) {
+    for(LiaStar lit : literals) {
       if (lit != null) {
         replaceNotZeroCondInLit(lit, paramNotZeroCond);
       }
@@ -995,22 +1056,22 @@ public class LiasumImpl extends Liastar {
   }
 
   void mergeParameterIte() {
-    ArrayList<Liastar> literals = new ArrayList<>();
+    ArrayList<LiaStar> literals = new ArrayList<>();
     decomposeConjunction(constraints, literals);
-    HashMap<LiavarImpl, Liastar> paramNotZeroCond = findParamVars(literals);
+    HashMap<LiaVarImpl, LiaStar> paramNotZeroCond = findParamVars(literals);
     replaceNotZeroCond(literals, paramNotZeroCond);
     constraints = mkConjunction(innerStar, literals);
   }
 
-  boolean existsOnlyInItecond(Liastar iteCond, String var) {
-    if (iteCond instanceof LiaandImpl) {
-      LiaandImpl tmp = (LiaandImpl) iteCond;
+  boolean existsOnlyInItecond(LiaStar iteCond, String var) {
+    if (iteCond instanceof LiaAndImpl) {
+      LiaAndImpl tmp = (LiaAndImpl) iteCond;
       return existsOnlyInItecond(tmp.operand1, var) && existsOnlyInItecond(tmp.operand2, var);
-    } else if (iteCond instanceof LianotImpl)  {
-      Liastar body = ((LianotImpl)iteCond).operand;
-      if(body instanceof LiaeqImpl) {
-        Liastar left = ((LiaeqImpl)body).operand1;
-        Liastar right = ((LiaeqImpl)body).operand2;
+    } else if (iteCond instanceof LiaNotImpl)  {
+      LiaStar body = ((LiaNotImpl)iteCond).operand;
+      if(body instanceof LiaEqImpl) {
+        LiaStar left = ((LiaEqImpl)body).operand1;
+        LiaStar right = ((LiaEqImpl)body).operand2;
         if(left.equals(mkVar(innerStar, var)) && right.equals(mkConst(innerStar, 0))) {
           return true;
         }
@@ -1020,27 +1081,27 @@ public class LiasumImpl extends Liastar {
     return !vars.contains(var);
   }
 
-  boolean existsOnlyInIteOrEqForLiteral(Liastar literal, String var) {
-    if(literal instanceof LiaeqImpl) {
-      LiaeqImpl equation = (LiaeqImpl) literal;
-      Liastar eqOp1 = equation.operand1;
-      Liastar eqOp2 = equation.operand2;
-      if(eqOp2 instanceof LiaiteImpl) {
-        LiaiteImpl ite = (LiaiteImpl) eqOp2;
-        Liastar iteOp1 = ite.operand1;
+  boolean existsOnlyInIteOrEqForLiteral(LiaStar literal, String var) {
+    if(literal instanceof LiaEqImpl) {
+      LiaEqImpl equation = (LiaEqImpl) literal;
+      LiaStar eqOp1 = equation.operand1;
+      LiaStar eqOp2 = equation.operand2;
+      if(eqOp2 instanceof LiaIteImpl) {
+        LiaIteImpl ite = (LiaIteImpl) eqOp2;
+        LiaStar iteOp1 = ite.operand1;
         Set<String> vars = iteOp1.collectVarSet();
         if(vars.contains(var)) {
           return false;
         }
-        Liastar iteOp2 = ite.operand2;
+        LiaStar iteOp2 = ite.operand2;
         vars = iteOp2.collectVarSet();
         if(vars.contains(var)) {
           return false;
         }
-        Liastar iteCond = ite.cond;
+        LiaStar iteCond = ite.cond;
         return existsOnlyInItecond(iteCond, var);
-      } else if(eqOp1 instanceof LiavarImpl && eqOp2 instanceof LiavarImpl){
-        if(((LiavarImpl)eqOp2).varName.equals(var)) {
+      } else if(eqOp1 instanceof LiaVarImpl && eqOp2 instanceof LiaVarImpl){
+        if(((LiaVarImpl)eqOp2).varName.equals(var)) {
           return true;
         }
       }
@@ -1049,10 +1110,10 @@ public class LiasumImpl extends Liastar {
     return !vars.contains(var);
   }
 
-  boolean existsOnlyInIteOrEq(ArrayList<Liastar> literals, String var) {
-    for(Liastar literal : literals) {
+  boolean existsOnlyInIteOrEq(ArrayList<LiaStar> literals, String var) {
+    for(LiaStar literal : literals) {
       if(literal != null) {
-        if (literal instanceof LiavarImpl && ((LiavarImpl)literal).varName.equals(var)) {
+        if (literal instanceof LiaVarImpl && ((LiaVarImpl)literal).varName.equals(var)) {
           continue;
         }
         if (!existsOnlyInIteOrEqForLiteral(literal, var)) {
@@ -1063,68 +1124,6 @@ public class LiasumImpl extends Liastar {
     return true;
   }
 
-  boolean isInnerVarEq(String v1, String v2) {
-    try (final Context ctx = new Context()) {
-      BoolExpr target = null;
-      Set<String> varNames = constraints.collectVarSet();
-      HashMap<String, IntExpr> varDef = new HashMap<>();
-      for (String varName : varNames) {
-        IntExpr varExp = ctx.mkIntConst(varName);
-        varDef.put(varName, varExp);
-      }
-      if(!varDef.containsKey(v1) || !varDef.containsKey(v2)) {
-        return false;
-      }
-
-      BoolExpr formulaF = (BoolExpr) constraints.transToSMT(ctx, varDef);
-      BoolExpr v1Eqv2 = ctx.mkEq( varDef.get(v1), varDef.get(v2) );
-      target = ctx.mkAnd(formulaF, ctx.mkNot(v1Eqv2));
-      Solver s = ctx.mkSolver(ctx.tryFor(ctx.mkTactic("qflia"), SqlSolver.timeout));
-      s.add(target);
-      Status q = s.check();
-      switch(q) {
-        case UNSATISFIABLE -> {
-          return true;
-        }
-        case UNKNOWN -> {
-          if (LogicSupport.dumpLiaFormulas) {
-            System.out.println("fail determine eq for" + v1 + " " + v2);
-          }
-          return false;
-        }
-        default -> {
-          return false;
-        }
-      }
-    } catch (Exception e) {
-      if (LogicSupport.dumpLiaFormulas) {
-        System.out.println("fail determine eq for" + v1 + " " + v2);
-      }
-      return false;
-    }
-  }
-
-  Liastar nativeExpandstar() {
-    Liastar result = null;
-    for(int i = 0; i < outerVector.size(); ++ i) {
-      String outVar1 = outerVector.get(i);
-      String inVar1 = innerVector.get(i);
-      for(int j = i + 1; j < outerVector.size(); ++ j) {
-        String outVar2 = outerVector.get(j);
-        String inVar2 = innerVector.get(j);
-        if (isInnerVarEq(inVar1, inVar2)){
-          Liastar newExp = mkEq(false, mkVar(false, outVar1), mkVar(false, outVar2));
-          result = (result == null) ? newExp : mkAnd(false, result, newExp);
-        }
-      }
-    }
-    if(result == null) {
-      return mkEq(false, mkConst(false, 0), mkConst(false, 0));
-    } else {
-      return result;
-    }
-  }
-
   public boolean OuterVarsEquals() {
     if (outerVector.size() != 2)
       return false;
@@ -1132,13 +1131,13 @@ public class LiasumImpl extends Liastar {
     String inVar1 = innerVector.get(0);
     String inVar2 = innerVector.get(1);
 
-    ArrayList<Liastar> literals = new ArrayList<>();
+    ArrayList<LiaStar> literals = new ArrayList<>();
     decomposeConjunction(constraints, literals);
-    ArrayList<LiaeqImpl> equations = new ArrayList<>();
-    for (Liastar l : literals) {
-      if (!(l instanceof LiaeqImpl)) continue;
-      LiaeqImpl equation = (LiaeqImpl) l;
-      if (equation.operand1 instanceof LiavarImpl && equation.operand2 instanceof LiavarImpl) {
+    ArrayList<LiaEqImpl> equations = new ArrayList<>();
+    for (LiaStar l : literals) {
+      if (!(l instanceof LiaEqImpl)) continue;
+      LiaEqImpl equation = (LiaEqImpl) l;
+      if (equation.operand1 instanceof LiaVarImpl && equation.operand2 instanceof LiaVarImpl) {
         equations.add(equation);
       }
     }
@@ -1149,9 +1148,9 @@ public class LiasumImpl extends Liastar {
     do {
       modified = false;
       int size = vars.size();
-      for (LiaeqImpl l : equations) {
-        String name1 = ((LiavarImpl) l.operand1).varName;
-        String name2 = ((LiavarImpl) l.operand2).varName;
+      for (LiaEqImpl l : equations) {
+        String name1 = ((LiaVarImpl) l.operand1).varName;
+        String name2 = ((LiaVarImpl) l.operand2).varName;
         if (vars.contains(name1) || vars.contains(name2)) {
           vars.add(name1);
           vars.add(name2);
@@ -1164,8 +1163,8 @@ public class LiasumImpl extends Liastar {
   }
 
   @Override
-  public Liastar subformulaWithoutStar() {
-    return Liastar.mkEq(false, Liastar.mkConst(false, 0), Liastar.mkConst(false, 0));
+  public LiaStar subformulaWithoutStar() {
+    return LiaStar.mkEq(false, LiaStar.mkConst(false, 0), LiaStar.mkConst(false, 0));
   }
 
   @Override
@@ -1174,13 +1173,21 @@ public class LiasumImpl extends Liastar {
   }
 
   @Override
-  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
-    Liastar constraints0 = constraints.transformPostOrder(transformer);
+  public LiaStar transformPostOrder(Function<LiaStar, LiaStar> transformer) {
+    LiaStar constraints0 = constraints.transformPostOrder(transformer);
     return transformer.apply(mkSum(
             innerStar,
             new ArrayList<>(outerVector),
             new ArrayList<>(innerVector),
             constraints0));
+  }
+
+  @Override
+  public LiaStar transformPostOrder(BiFunction<LiaStar, LiaStar, LiaStar> transformer, LiaStar parent) {
+    LiaStar constraints0 = constraints.transformPostOrder(transformer, this);
+    return transformer.apply(
+            mkSum(innerStar, new ArrayList<>(outerVector), new ArrayList<>(innerVector), constraints0),
+            parent);
   }
 
 }

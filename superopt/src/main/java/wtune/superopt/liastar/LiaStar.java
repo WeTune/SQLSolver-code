@@ -4,12 +4,13 @@ import com.microsoft.z3.*;
 import wtune.superopt.util.PrettyBuilder;
 
 import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
 import static wtune.superopt.liastar.LiaOpType.*;
 
 
-public abstract class Liastar {
+public abstract class LiaStar {
 
   public boolean innerStar = false;
 
@@ -30,7 +31,7 @@ public abstract class Liastar {
     dnfStartTime.set(0);
   }
 
-  public Liastar mergeSameVars() {return this;}
+  public LiaStar mergeSameVars() {return this;}
 
   public static boolean isDnfTimeout() {
     dnfStartTime.set(dnfStartTime.get() + 1);
@@ -39,16 +40,16 @@ public abstract class Liastar {
 
   public abstract boolean isLia();
 
-  public abstract Liastar deepcopy();
+  public abstract LiaStar deepcopy();
 
-  public abstract Liastar multToBin(int n);
+  public abstract LiaStar multToBin(int n);
 
-  public abstract Liastar simplifyMult(HashMap<Liastar, String> multToVar);
+  public abstract LiaStar simplifyMult(HashMap<LiaStar, String> multToVar);
 
   public abstract LiaOpType getType();
 
 
-  public abstract Liastar mergeMult(HashMap<LiamultImpl, String> multToVar);
+  public abstract LiaStar mergeMult(HashMap<LiaMulImpl, String> multToVar);
 
   public abstract int embeddingLayers();
 
@@ -68,16 +69,22 @@ public abstract class Liastar {
 
   public abstract Set<String> collectVarSet();
 
-  public abstract Liastar expandStar() throws Exception;
+  public abstract Set<String> collectAllVars();
 
-  public Liastar liaAndConcat(Liastar[] array) {
-    Liastar res = null;
+  public abstract LiaStar expandStar();
+
+  public boolean isInStar() {
+    return innerStar;
+  }
+
+  public LiaStar liaAndConcat(LiaStar[] array) {
+    LiaStar res = null;
     for(int i = 0; i < array.length; ++ i) {
       if(array[i] != null) {
         if(res == null)
           res = array[i];
         else
-          res = new LiaandImpl(res, array[i]);
+          res = new LiaAndImpl(res, array[i]);
         res.innerStar = true;
       }
     }
@@ -85,7 +92,11 @@ public abstract class Liastar {
     return res;
   }
 
-  public abstract Expr transToSMT(Context ctx, HashMap<String, IntExpr> varsName);
+  public Expr transToSMT(Context ctx, Map<String, IntExpr> varsName) {
+    return transToSMT(ctx, varsName, new HashMap<>());
+  }
+
+  public abstract Expr transToSMT(Context ctx, Map<String, IntExpr> varsName, Map<String, FuncDecl> funcsName);
 
   final class EstimateResult {
     final Set<String> vars;
@@ -104,125 +115,175 @@ public abstract class Liastar {
 
   public abstract Expr expandStarWithK(Context ctx, Solver sol, String suffix);
 
-  public static Liastar mkAnd(boolean isInnerStar, Liastar a, Liastar b) {
-    if(a == null && b == null) {
-      assert false;
+  public static LiaStar mkAnd(boolean isInnerStar, LiaStar a, LiaStar b) {
+    if (a == null && b == null) {
       return null;
     }
-    else if(a == null && b != null)
+    LiaStar trueLia = mkTrue(isInnerStar);
+    if (a == null || a.equals(trueLia)) {
       return b;
-    else if(a != null && b == null)
-      return a;
-    else {
-      Liastar result = new LiaandImpl(a, b);
-      result.innerStar = isInnerStar;
-      return result;
     }
-  }
-
-  public static Liastar mkConst(boolean isInnerStar, long c) {
-    Liastar result = new LiaconstImpl(c);
+    if (b == null || b.equals(trueLia)) {
+      return a;
+    }
+    LiaStar falseLia = mkFalse(isInnerStar);
+    if (a.equals(falseLia) || b.equals(falseLia)) {
+      return falseLia;
+    }
+    LiaStar result = new LiaAndImpl(a, b);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkString(boolean isInnerStar, String v) {
-    Liastar result = new LiastringImpl(v);
+  public static LiaStar mkAndNoStar(LiaStar... terms) {
+    LiaStar result = mkTrue(false);
+    for (LiaStar term : terms) {
+      result = mkAnd(false, result, term);
+    }
+    return result;
+  }
+
+  public static LiaStar mkConst(boolean isInnerStar, long c) {
+    LiaStar result = new LiaConstImpl(c);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkEq(boolean isInnerStar, Liastar a, Liastar b) {
-    Liastar result = new LiaeqImpl(a, b);
+  public static LiaStar mkString(boolean isInnerStar, String v) {
+    LiaStar result = new LiaStringImpl(v);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkIte(boolean isInnerStar, Liastar cond, Liastar op1, Liastar op2) {
-    Liastar result = new LiaiteImpl(cond, op1, op2);
+  public static LiaStar mkEq(boolean isInnerStar, LiaStar a, LiaStar b) {
+    LiaStar result = new LiaEqImpl(a, b);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkLe(boolean isInnerStar, Liastar a, Liastar b) {
-    Liastar result = new LialeImpl(a, b);
+  public static LiaStar mkIte(boolean isInnerStar, LiaStar cond, LiaStar op1, LiaStar op2) {
+    LiaStar result = new LiaIteImpl(cond, op1, op2);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkLt(boolean isInnerStar, Liastar a, Liastar b) {
-    Liastar result = new LialtImpl(a, b);
+  public static LiaStar mkLe(boolean isInnerStar, LiaStar a, LiaStar b) {
+    LiaStar result = new LiaLeImpl(a, b);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkMult(boolean isInnerStar, Liastar a, Liastar b) {
-    Liastar result = new LiamultImpl(a, b);
+  public static LiaStar mkLt(boolean isInnerStar, LiaStar a, LiaStar b) {
+    LiaStar result = new LiaLtImpl(a, b);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkNot(boolean isInnerStar, Liastar a) {
-    Liastar result = new LianotImpl(a);
+  public static LiaStar mkMult(boolean isInnerStar, LiaStar a, LiaStar b) {
+    if (a.isConstV(0) || b.isConstV(0)) {
+      return mkConst(isInnerStar, 0);
+    }
+    if (a.isConstV(1)) {
+      return b;
+    }
+    if (b.isConstV(1)) {
+      return a;
+    }
+    LiaStar result = new LiaMulImpl(a, b);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkOr(boolean isInnerStar, Liastar a, Liastar b) {
-    if(a == null && b == null) {
+  public static LiaStar mkNot(boolean isInnerStar, LiaStar a) {
+    LiaStar result = new LiaNotImpl(a);
+    result.innerStar = isInnerStar;
+    return result;
+  }
+
+  public static LiaStar mkOr(boolean isInnerStar, LiaStar a, LiaStar b) {
+    if (a == null && b == null) {
       assert false;
       return a;
     }
-    else if(a == null) return b;
-    else if(b == null) return a;
-    else {
-      Liastar result = new LiaorImpl(a, b);
-      result.innerStar = isInnerStar;
-      return result;
+    LiaStar falseLia = mkFalse(isInnerStar);
+    if (a == null || a.equals(falseLia)) {
+      return b;
     }
-  }
-
-  public static Liastar mkPlus(boolean isInnerStar, Liastar a, Liastar b) {
-    Liastar result = new LiaplusImpl(a, b);
+    if (b == null || b.equals(falseLia)) {
+      return a;
+    }
+    LiaStar trueLia = mkTrue(isInnerStar);
+    if (a.equals(trueLia) || b.equals(trueLia)) {
+      return trueLia;
+    }
+    LiaStar result = new LiaOrImpl(a, b);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkDiv(boolean isInnerStar, Liastar a, Liastar b) {
-    Liastar result = new LiadivImpl(a, b);
+  public static LiaStar mkPlus(boolean isInnerStar, LiaStar a, LiaStar b) {
+    if (a.isConstV(0)) {
+      return b;
+    }
+    if (b.isConstV(0)) {
+      return a;
+    }
+    LiaStar result = new LiaPlusImpl(a, b);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkSum(boolean isInnerStar, ArrayList<String> outerVector, ArrayList<String> innerVector, Liastar a) {
-    Liastar result = new LiasumImpl(outerVector, innerVector, a);
+  public static LiaStar mkDiv(boolean isInnerStar, LiaStar a, LiaStar b) {
+    LiaStar result = new LiaDivImpl(a, b);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkFunc(boolean isInnerStar, String funcName, Liastar var) {
-    Liastar result = new LiaFuncImpl(funcName, var);
+  public static LiaStar mkSum(boolean isInnerStar, ArrayList<String> outerVector, ArrayList<String> innerVector, LiaStar a) {
+    LiaStar result = new LiaSumImpl(outerVector, innerVector, a);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkFunc(boolean isInnerStar, String funcName, List<Liastar> vars) {
-    Liastar result = new LiaFuncImpl(funcName, vars);
+  public static LiaStar mkFunc(boolean isInnerStar, String funcName, LiaStar var) {
+    LiaStar result = new LiaFuncImpl(funcName, var);
     result.innerStar = isInnerStar;
     return result;
   }
 
-  public static Liastar mkVar(boolean isInnerStar, String varName) {
-    Liastar result = new LiavarImpl(varName);
+  public static LiaStar mkFunc(boolean isInnerStar, String funcName, List<LiaStar> vars) {
+    LiaStar result = new LiaFuncImpl(funcName, vars);
     result.innerStar = isInnerStar;
     return result;
+  }
+
+  public static LiaStar mkVar(boolean isInnerStar, String varName) {
+    LiaStar result = new LiaVarImpl(varName);
+    result.innerStar = isInnerStar;
+    return result;
+  }
+
+  public static LiaStar mkTrue(boolean isInnerStar) {
+    return mkEq(isInnerStar, mkConst(isInnerStar, 0), mkConst(isInnerStar, 0));
+  }
+
+  public static LiaStar mkFalse(boolean isInnerStar) {
+    return mkEq(isInnerStar, mkConst(isInnerStar, 1), mkConst(isInnerStar, 0));
+  }
+
+  public static LiaStar mkImplies(boolean isInnerStar, LiaStar a, LiaStar b) {
+    return mkOr(isInnerStar, mkNot(isInnerStar, a), b);
+  }
+
+  public static LiaStar mkNeq(boolean isInnerStar, LiaStar a, LiaStar b) {
+    return mkNot(isInnerStar, mkEq(isInnerStar, a, b));
   }
 
   public abstract Set<String> getVars();
 
   public boolean isConstV(long v) {
-    if(this instanceof LiaconstImpl)
-      return ((LiaconstImpl) this).getValue() == v;
+    if(this instanceof LiaConstImpl)
+      return ((LiaConstImpl) this).getValue() == v;
     else
       return false;
   }
@@ -230,7 +291,7 @@ public abstract class Liastar {
   /** Transform a parameterized Lia formula to its DNF
    * @param activated: set `false` at the beginning
    * */
-  public static Liastar paramLiaStar2DNF(Liastar formula, boolean activated) throws Exception {
+  public static LiaStar paramLiaStar2DNF(LiaStar formula, boolean activated) throws Exception {
 
     if(isDnfTimeout())
       throw new Exception("dnf timeout");
@@ -242,19 +303,19 @@ public abstract class Liastar {
       // Logic op: OR, AND NOT
       case LOR -> {
         // Do nothing for f1 \/ f2
-        final LiaorImpl or = (LiaorImpl) formula;
+        final LiaOrImpl or = (LiaOrImpl) formula;
         or.operand1 = paramLiaStar2DNF(or.operand1, activated);
         or.operand2 = paramLiaStar2DNF(or.operand2, activated);
         return simplifyDNF(or);
 //        return or;
       }
       case LAND -> {
-        final LiaandImpl and = (LiaandImpl) formula;
+        final LiaAndImpl and = (LiaAndImpl) formula;
         final boolean innerStar = and.innerStar;
         and.operand1 = paramLiaStar2DNF(and.operand1, activated);
         and.operand2 = paramLiaStar2DNF(and.operand2, activated);
         if (activated) {
-          Liastar newLia = null;
+          LiaStar newLia = null;
           // if (and.operand1.getType() == LNOT && and.operand2.getType() == LNOT) {
             // ~f1 /\ ~f2 <=> f1 \/ f2
             // final Liastar subOp1 = ((LianotImpl) and.operand1).operand;
@@ -263,8 +324,8 @@ public abstract class Liastar {
           // }
           if (and.operand1.getType() == LOR || and.operand2.getType() == LOR) {
             // f /\ (f1 \/ f2) <=> (f /\ f1) \/ (f1 /\ f2)
-            final LiaorImpl or = (LiaorImpl) (and.operand1.getType() == LOR? and.operand1 : and.operand2);
-            final Liastar other = or == and.operand1 ? and.operand2 : and.operand1; // f
+            final LiaOrImpl or = (LiaOrImpl) (and.operand1.getType() == LOR? and.operand1 : and.operand2);
+            final LiaStar other = or == and.operand1 ? and.operand2 : and.operand1; // f
             newLia = mkOr(innerStar, mkAnd(innerStar, other, or.operand1), mkAnd(innerStar, other, or.operand2));
           }
           if (newLia != null) return paramLiaStar2DNF(newLia, activated);
@@ -276,21 +337,21 @@ public abstract class Liastar {
         // ~(~f) <=> f
         // ~(f1 /\ f2) <=> ~f1 \/ ~f2
         // ~(f1 \/ f2) <=> ~f1 /\ ~f2
-        final LianotImpl not = (LianotImpl) formula;
+        final LiaNotImpl not = (LiaNotImpl) formula;
         final boolean innerStar = not.innerStar;
         not.operand = paramLiaStar2DNF(not.operand, activated);
         if (activated) {
-          Liastar newLia = null;
+          LiaStar newLia = null;
           switch (not.operand.getType()) {
-            case LNOT -> newLia = ((LianotImpl) not.operand).operand;
+            case LNOT -> newLia = ((LiaNotImpl) not.operand).operand;
             case LAND -> {
-              final Liastar subOp1 = ((LiaandImpl) not.operand).operand1;
-              final Liastar subOp2 = ((LiaandImpl) not.operand).operand2;
+              final LiaStar subOp1 = ((LiaAndImpl) not.operand).operand1;
+              final LiaStar subOp2 = ((LiaAndImpl) not.operand).operand2;
               newLia = mkOr(innerStar, mkNot(innerStar, subOp1), mkNot(innerStar, subOp2));
             }
             case LOR -> {
-              final Liastar subOp1 = ((LiaorImpl) not.operand).operand1;
-              final Liastar subOp2 = ((LiaorImpl) not.operand).operand2;
+              final LiaStar subOp1 = ((LiaOrImpl) not.operand).operand1;
+              final LiaStar subOp2 = ((LiaOrImpl) not.operand).operand2;
               newLia = mkAnd(innerStar, mkNot(innerStar, subOp1), mkNot(innerStar, subOp2));
             }
           }
@@ -302,19 +363,19 @@ public abstract class Liastar {
       // Arithmetic ops: EQ, LE, LT
       case LEQ-> {
         // a = ite(b, c, d) <=> (b /\ a = c) \/ (~b /\ a = d)
-        final LiaeqImpl eq = (LiaeqImpl) formula;
+        final LiaEqImpl eq = (LiaEqImpl) formula;
 //        eq.operand1 = paramLiaStar2DNF(eq.operand1, activated);
 //        eq.operand2 = paramLiaStar2DNF(eq.operand2, activated);
         final boolean innerStar = eq.innerStar;
         if (activated && (eq.operand1.getType() == LITE || eq.operand2.getType() == LITE)) {
-          final LiaiteImpl ite = (LiaiteImpl) (eq.operand1.getType() == LITE ? eq.operand1 : eq.operand2);
-          final Liastar other = ite == eq.operand1 ? eq.operand2 : eq.operand1;
+          final LiaIteImpl ite = (LiaIteImpl) (eq.operand1.getType() == LITE ? eq.operand1 : eq.operand2);
+          final LiaStar other = ite == eq.operand1 ? eq.operand2 : eq.operand1;
 
-          final LiaandImpl and1 = (LiaandImpl)
+          final LiaAndImpl and1 = (LiaAndImpl)
               mkAnd(innerStar, ite.cond, mkEq(innerStar, other, ite.operand1));
-          final LiaandImpl and2 = (LiaandImpl)
+          final LiaAndImpl and2 = (LiaAndImpl)
               mkAnd(innerStar, mkNot(innerStar, ite.cond), mkEq(innerStar, other, ite.operand2));
-          final Liastar or = mkOr(innerStar, and1, and2);
+          final LiaStar or = mkOr(innerStar, and1, and2);
           return or;
 //          return paramLiaStar2DNF(or, activated);
         }
@@ -322,38 +383,38 @@ public abstract class Liastar {
 //        return eq;
       }
       case LLE-> {
-        final LialeImpl le = (LialeImpl) formula;
+        final LiaLeImpl le = (LiaLeImpl) formula;
 //        le.operand1 = paramLiaStar2DNF(le.operand1, activated);
 //        le.operand2 = paramLiaStar2DNF(le.operand2, activated);
         final boolean innerStar = le.innerStar;
         if (activated && (le.operand1.getType() == LITE || le.operand2.getType() == LITE)) {
-          final LiaiteImpl ite = (LiaiteImpl) (le.operand1.getType() == LITE ? le.operand1 : le.operand2);
-          final Liastar other = ite == le.operand1 ? le.operand2 : le.operand1;
+          final LiaIteImpl ite = (LiaIteImpl) (le.operand1.getType() == LITE ? le.operand1 : le.operand2);
+          final LiaStar other = ite == le.operand1 ? le.operand2 : le.operand1;
 
-          final LiaandImpl and1 = (LiaandImpl)
+          final LiaAndImpl and1 = (LiaAndImpl)
               mkAnd(innerStar, ite.cond, mkLe(innerStar, other, ite.operand1));
-          final LiaandImpl and2 = (LiaandImpl)
+          final LiaAndImpl and2 = (LiaAndImpl)
               mkAnd(innerStar, mkNot(innerStar, ite.cond), mkLe(innerStar, other, ite.operand2));
-          final Liastar or = mkOr(innerStar, and1, and2);
+          final LiaStar or = mkOr(innerStar, and1, and2);
           return paramLiaStar2DNF(or, activated);
         }
         return simplifyDNF(le);
 //        return le;
       }
       case LLT-> {
-        final LialtImpl lt = (LialtImpl) formula;
+        final LiaLtImpl lt = (LiaLtImpl) formula;
 //        lt.operand1 = paramLiaStar2DNF(lt.operand1, activated);
 //        lt.operand2 = paramLiaStar2DNF(lt.operand2, activated);
         final boolean innerStar = lt.innerStar;
         if (activated && (lt.operand1.getType() == LITE || lt.operand2.getType() == LITE)) {
-          final LiaiteImpl ite = (LiaiteImpl) (lt.operand1.getType() == LITE ? lt.operand1 : lt.operand2);
-          final Liastar other = ite == lt.operand1 ? lt.operand2 : lt.operand1;
+          final LiaIteImpl ite = (LiaIteImpl) (lt.operand1.getType() == LITE ? lt.operand1 : lt.operand2);
+          final LiaStar other = ite == lt.operand1 ? lt.operand2 : lt.operand1;
 
-          final LiaandImpl and1 = (LiaandImpl)
+          final LiaAndImpl and1 = (LiaAndImpl)
               mkAnd(innerStar, ite.cond, mkLt(innerStar, other, ite.operand1));
-          final LiaandImpl and2 = (LiaandImpl)
+          final LiaAndImpl and2 = (LiaAndImpl)
               mkAnd(innerStar, mkNot(innerStar, ite.cond), mkLt(innerStar, other, ite.operand2));
-          final Liastar or = mkOr(innerStar, and1, and2);
+          final LiaStar or = mkOr(innerStar, and1, and2);
           return paramLiaStar2DNF(or, activated);
         }
         return simplifyDNF(lt);
@@ -361,21 +422,21 @@ public abstract class Liastar {
       }
       // Simple terms: PLUS, MULT, ITE
       case LPLUS -> {
-        final LiaplusImpl plus = (LiaplusImpl) formula;
+        final LiaPlusImpl plus = (LiaPlusImpl) formula;
 //        plus.operand1 = paramLiaStar2DNF(plus.operand1, activated);
 //        plus.operand2 = paramLiaStar2DNF(plus.operand2, activated);
 //        return simplifyDNF(plus);
         return plus;
       }
       case LMULT -> {
-        final LiamultImpl mult = (LiamultImpl) formula;
+        final LiaMulImpl mult = (LiaMulImpl) formula;
 //        mult.operand1 = paramLiaStar2DNF(mult.operand1, activated);
 //        mult.operand2 = paramLiaStar2DNF(mult.operand2, activated);
 //        return simplifyDNF(mult);
         return mult;
       }
       case LITE -> {
-        final LiaiteImpl ite = (LiaiteImpl) formula;
+        final LiaIteImpl ite = (LiaIteImpl) formula;
 //        ite.cond = paramLiaStar2DNF(ite.cond, activated);
 //        ite.operand1 = paramLiaStar2DNF(ite.operand1, activated);
 //        ite.operand2 = paramLiaStar2DNF(ite.operand2, activated);
@@ -418,30 +479,30 @@ public abstract class Liastar {
     return new HashSet<>();
   }
 
-  public Liastar removeParameter() {
+  public LiaStar removeParameter() {
     return this;
   }
 
-  public Liastar removeParameterEager() {
+  public LiaStar removeParameterEager() {
     return this;
   }
 
-  public Liastar pushUpParameter(HashSet<String> newVars) {
+  public LiaStar pushUpParameter(HashSet<String> newVars) {
     return this;
   }
 
-  public Liastar simplifyIte() {
+  public LiaStar simplifyIte() {
     return this;
   }
 
-  public static ArrayList<Liastar> decomposeDNF(Liastar f) {
+  public static ArrayList<LiaStar> decomposeDNF(LiaStar f) {
     if(f.getType() == LiaOpType.LOR) {
-      LiaorImpl tmp = (LiaorImpl) f;
-      ArrayList<Liastar> result = decomposeDNF(tmp.operand1);
+      LiaOrImpl tmp = (LiaOrImpl) f;
+      ArrayList<LiaStar> result = decomposeDNF(tmp.operand1);
       result.addAll(decomposeDNF(tmp.operand2));
       return result;
     } else {
-      ArrayList<Liastar> result = new ArrayList<>();
+      ArrayList<LiaStar> result = new ArrayList<>();
       result.add(f);
       return result;
     }
@@ -456,9 +517,9 @@ public abstract class Liastar {
     return false;
   }
 
-  public static void decomposeConjunction(Liastar formula, ArrayList<Liastar> literals) {
+  public static void decomposeConjunction(LiaStar formula, ArrayList<LiaStar> literals) {
     if(formula.getType() == LiaOpType.LAND) {
-      LiaandImpl tmp = (LiaandImpl) formula;
+      LiaAndImpl tmp = (LiaAndImpl) formula;
       decomposeConjunction(tmp.operand1, literals);
       decomposeConjunction(tmp.operand2, literals);
     } else {
@@ -466,41 +527,41 @@ public abstract class Liastar {
     }
   }
 
-  public static boolean isTrue(Liastar formula) {
+  public static boolean isTrue(LiaStar formula) {
     switch(formula.getType()) {
       case LNOT -> {
-        LianotImpl tmp = (LianotImpl) formula;
+        LiaNotImpl tmp = (LiaNotImpl) formula;
         return isFalse(tmp.operand);
       }
       case LLT -> {
-        LialtImpl tmp = (LialtImpl) formula;
-        Liastar operand1 = tmp.operand1;
-        Liastar operand2 = tmp.operand2;
-        if((operand1 instanceof LiaconstImpl) && (operand2 instanceof LiaconstImpl)) {
-          long const1 = ((LiaconstImpl)operand1).value;
-          long const2 = ((LiaconstImpl)operand2).value;
+        LiaLtImpl tmp = (LiaLtImpl) formula;
+        LiaStar operand1 = tmp.operand1;
+        LiaStar operand2 = tmp.operand2;
+        if((operand1 instanceof LiaConstImpl) && (operand2 instanceof LiaConstImpl)) {
+          long const1 = ((LiaConstImpl)operand1).value;
+          long const2 = ((LiaConstImpl)operand2).value;
           return (const1 < const2);
         }
         break;
       }
       case LLE -> {
-        LialeImpl tmp = (LialeImpl) formula;
-        Liastar operand1 = tmp.operand1;
-        Liastar operand2 = tmp.operand2;
+        LiaLeImpl tmp = (LiaLeImpl) formula;
+        LiaStar operand1 = tmp.operand1;
+        LiaStar operand2 = tmp.operand2;
         if(operand1.equals(operand2)) {
           return true;
         }
-        if((operand1 instanceof LiaconstImpl) && (operand2 instanceof LiaconstImpl)) {
-          long const1 = ((LiaconstImpl)operand1).value;
-          long const2 = ((LiaconstImpl)operand2).value;
+        if((operand1 instanceof LiaConstImpl) && (operand2 instanceof LiaConstImpl)) {
+          long const1 = ((LiaConstImpl)operand1).value;
+          long const2 = ((LiaConstImpl)operand2).value;
           return (const1 <= const2);
         }
         break;
       }
       case LEQ -> {
-        LiaeqImpl tmp = (LiaeqImpl) formula;
-        Liastar operand1 = tmp.operand1;
-        Liastar operand2 = tmp.operand2;
+        LiaEqImpl tmp = (LiaEqImpl) formula;
+        LiaStar operand1 = tmp.operand1;
+        LiaStar operand2 = tmp.operand2;
         return operand1.equals(operand2);
       }
       default -> {
@@ -510,44 +571,44 @@ public abstract class Liastar {
     return false;
   }
 
-  public static  boolean isFalse(Liastar formula) {
+  public static  boolean isFalse(LiaStar formula) {
     switch(formula.getType()) {
       case LNOT -> {
-        LianotImpl tmp = (LianotImpl) formula;
+        LiaNotImpl tmp = (LiaNotImpl) formula;
         return isTrue(tmp.operand);
       }
       case LLT -> {
-        LialtImpl tmp = (LialtImpl) formula;
-        Liastar operand1 = tmp.operand1;
-        Liastar operand2 = tmp.operand2;
+        LiaLtImpl tmp = (LiaLtImpl) formula;
+        LiaStar operand1 = tmp.operand1;
+        LiaStar operand2 = tmp.operand2;
         if(operand1.equals(operand2)) {
           return true;
         }
-        if((operand1 instanceof LiaconstImpl) && (operand2 instanceof LiaconstImpl)) {
-          long const1 = ((LiaconstImpl)operand1).value;
-          long const2 = ((LiaconstImpl)operand2).value;
+        if((operand1 instanceof LiaConstImpl) && (operand2 instanceof LiaConstImpl)) {
+          long const1 = ((LiaConstImpl)operand1).value;
+          long const2 = ((LiaConstImpl)operand2).value;
           return !(const1 < const2);
         }
         break;
       }
       case LLE -> {
-        LialeImpl tmp = (LialeImpl) formula;
-        Liastar operand1 = tmp.operand1;
-        Liastar operand2 = tmp.operand2;
-        if((operand1 instanceof LiaconstImpl) && (operand2 instanceof LiaconstImpl)) {
-          long const1 = ((LiaconstImpl)operand1).value;
-          long const2 = ((LiaconstImpl)operand2).value;
+        LiaLeImpl tmp = (LiaLeImpl) formula;
+        LiaStar operand1 = tmp.operand1;
+        LiaStar operand2 = tmp.operand2;
+        if((operand1 instanceof LiaConstImpl) && (operand2 instanceof LiaConstImpl)) {
+          long const1 = ((LiaConstImpl)operand1).value;
+          long const2 = ((LiaConstImpl)operand2).value;
           return !(const1 <= const2);
         }
         break;
       }
       case LEQ -> {
-        LiaeqImpl tmp = (LiaeqImpl) formula;
-        Liastar operand1 = tmp.operand1;
-        Liastar operand2 = tmp.operand2;
-        if((operand1 instanceof LiaconstImpl) && (operand2 instanceof LiaconstImpl)) {
-          long const1 = ((LiaconstImpl)operand1).value;
-          long const2 = ((LiaconstImpl)operand2).value;
+        LiaEqImpl tmp = (LiaEqImpl) formula;
+        LiaStar operand1 = tmp.operand1;
+        LiaStar operand2 = tmp.operand2;
+        if((operand1 instanceof LiaConstImpl) && (operand2 instanceof LiaConstImpl)) {
+          long const1 = ((LiaConstImpl)operand1).value;
+          long const2 = ((LiaConstImpl)operand2).value;
           return !(const1 == const2);
         }
         break;
@@ -562,16 +623,16 @@ public abstract class Liastar {
   // return null when the conjunction is false
   // return 1 when the conjunction is true
   // Otherwise, return simplified formula
-  public static Liastar simplifyConj(Liastar formula) {
-    ArrayList<Liastar> literals = new ArrayList<>();
+  public static LiaStar simplifyConj(LiaStar formula) {
+    ArrayList<LiaStar> literals = new ArrayList<>();
     decomposeConjunction(formula, literals);
-    Liastar result = null;
-    for(Liastar lit : literals) {
+    LiaStar result = null;
+    for(LiaStar lit : literals) {
       if(isFalse(lit)) {
         return null;
       }
-      if(lit instanceof LianotImpl) {
-        LianotImpl tmp = (LianotImpl) lit;
+      if(lit instanceof LiaNotImpl) {
+        LiaNotImpl tmp = (LiaNotImpl) lit;
         if(literals.contains(tmp.operand)) {
           return null;
         }
@@ -586,12 +647,12 @@ public abstract class Liastar {
   // return 0 = 0 when formula is true
   // return 0 = 1 when formula is false
   // Otherwise, return simplified formula
-  public static Liastar simplifyDNF(Liastar formula) {
-    ArrayList<Liastar> conjunctions = decomposeDNF(formula);
-    Liastar result = null;
-    for(Liastar conj : conjunctions) {
-      Liastar simpleConj = simplifyConj(conj);
-      if(simpleConj instanceof LiaconstImpl) {
+  public static LiaStar simplifyDNF(LiaStar formula) {
+    ArrayList<LiaStar> conjunctions = decomposeDNF(formula);
+    LiaStar result = null;
+    for(LiaStar conj : conjunctions) {
+      LiaStar simpleConj = simplifyConj(conj);
+      if(simpleConj instanceof LiaConstImpl) {
         return mkEq(formula.innerStar, mkConst(formula.innerStar, 0), mkConst(formula.innerStar, 0));
       } else if(simpleConj != null) {
         result = (result == null) ? simpleConj : mkOr(formula.innerStar, result, simpleConj);
@@ -600,55 +661,55 @@ public abstract class Liastar {
     return (result == null) ? mkEq(formula.innerStar, mkConst(formula.innerStar, 0), mkConst(formula.innerStar, 1)) : result;
   }
 
-  public Liastar replaceParams(Liastar formula, HashSet<String> params, HashMap<String, String> paramInnerMap) {
+  public LiaStar replaceParams(LiaStar formula, HashSet<String> params, HashMap<String, String> paramInnerMap) {
     if(formula == null) {
       return formula;
     }
     switch(formula.getType()) {
       case LEQ -> {
-        LiaeqImpl tmp = (LiaeqImpl) formula;
+        LiaEqImpl tmp = (LiaEqImpl) formula;
         tmp.operand1 = replaceParams(tmp.operand1, params, paramInnerMap);
         tmp.operand2 = replaceParams(tmp.operand2, params, paramInnerMap);
         return tmp;
       }
       case LLE -> {
-        LialeImpl tmp = (LialeImpl) formula;
+        LiaLeImpl tmp = (LiaLeImpl) formula;
         tmp.operand1 = replaceParams(tmp.operand1, params, paramInnerMap);
         tmp.operand2 = replaceParams(tmp.operand2, params, paramInnerMap);
         return tmp;
       }
       case LLT -> {
-        LialtImpl tmp = (LialtImpl) formula;
+        LiaLtImpl tmp = (LiaLtImpl) formula;
         tmp.operand1 = replaceParams(tmp.operand1, params, paramInnerMap);
         tmp.operand2 = replaceParams(tmp.operand2, params, paramInnerMap);
         return tmp;
       }
       case LOR -> {
-        LiaorImpl tmp = (LiaorImpl) formula;
+        LiaOrImpl tmp = (LiaOrImpl) formula;
         tmp.operand1 = replaceParams(tmp.operand1, params, paramInnerMap);
         tmp.operand2 = replaceParams(tmp.operand2, params, paramInnerMap);
         return tmp;
       }
       case LAND -> {
-        LiaandImpl tmp = (LiaandImpl) formula;
+        LiaAndImpl tmp = (LiaAndImpl) formula;
         tmp.operand1 = replaceParams(tmp.operand1, params, paramInnerMap);
         tmp.operand2 = replaceParams(tmp.operand2, params, paramInnerMap);
         return tmp;
       }
       case LITE -> {
-        LiaiteImpl tmp = (LiaiteImpl) formula;
+        LiaIteImpl tmp = (LiaIteImpl) formula;
         tmp.cond = replaceParams(tmp.cond, params, paramInnerMap);
         tmp.operand1 = replaceParams(tmp.operand1, params, paramInnerMap);
         tmp.operand2 = replaceParams(tmp.operand2, params, paramInnerMap);
         return tmp;
       }
       case LNOT -> {
-        LianotImpl tmp = (LianotImpl) formula;
+        LiaNotImpl tmp = (LiaNotImpl) formula;
         tmp.operand = replaceParams( tmp.operand, params, paramInnerMap);
         return tmp;
       }
       case LVAR -> {
-        LiavarImpl tmp = (LiavarImpl) formula;
+        LiaVarImpl tmp = (LiaVarImpl) formula;
         if(params.contains(tmp.varName)) {
           if(paramInnerMap.containsKey(tmp.varName)) {
             return mkVar(tmp.innerStar, paramInnerMap.get(tmp.varName));
@@ -661,13 +722,13 @@ public abstract class Liastar {
         return formula;
       }
       case LMULT -> {
-        LiamultImpl tmp = (LiamultImpl) formula;
+        LiaMulImpl tmp = (LiaMulImpl) formula;
         tmp.operand1 = replaceParams(tmp.operand1, params, paramInnerMap);
         tmp.operand2 = replaceParams(tmp.operand2, params, paramInnerMap);
         return tmp;
       }
       case LPLUS -> {
-        LiaplusImpl tmp = (LiaplusImpl) formula;
+        LiaPlusImpl tmp = (LiaPlusImpl) formula;
         tmp.operand1 = replaceParams(tmp.operand1, params, paramInnerMap);
         tmp.operand2 = replaceParams(tmp.operand2, params, paramInnerMap);
         return tmp;
@@ -678,9 +739,9 @@ public abstract class Liastar {
     }
   }
 
-  void decomposePluses(Liastar formula, HashSet<Liastar> items) {
-    if(formula instanceof LiaplusImpl) {
-      LiaplusImpl tmp = (LiaplusImpl) formula;
+  void decomposePluses(LiaStar formula, HashSet<LiaStar> items) {
+    if(formula instanceof LiaPlusImpl) {
+      LiaPlusImpl tmp = (LiaPlusImpl) formula;
       decomposePluses(tmp.operand1, items);
       decomposePluses(tmp.operand2, items);
     } else {
@@ -689,9 +750,8 @@ public abstract class Liastar {
   }
 
 
-  void decomposeMults(Liastar formula, HashSet<Liastar> items) {
-    if(formula instanceof LiamultImpl) {
-      LiamultImpl tmp = (LiamultImpl) formula;
+  void decomposeMults(LiaStar formula, Set<LiaStar> items) {
+    if (formula instanceof LiaMulImpl tmp) {
       decomposeMults(tmp.operand1, items);
       decomposeMults(tmp.operand2, items);
     } else {
@@ -702,14 +762,14 @@ public abstract class Liastar {
 
   // determine if formula is ite(cond, op, 0) or ite(cond, 0, op)
   // if so, return true, array[0] = cond and array[1] = op
-  public static boolean ishasZeroIte(boolean isInnerStar, Liastar formula, Liastar[] array) {
+  public static boolean ishasZeroIte(boolean isInnerStar, LiaStar formula, LiaStar[] array) {
     if(formula == null) {
       return false;
     }
-    if(!(formula instanceof LiaiteImpl)) {
+    if(!(formula instanceof LiaIteImpl)) {
       return false;
     }
-    LiaiteImpl ite = (LiaiteImpl) formula;
+    LiaIteImpl ite = (LiaIteImpl) formula;
     if(ite.operand1.isConstV(0)) {
       array[0] = mkNot(isInnerStar, ite.cond.deepcopy());
       array[1] = ite.operand2.deepcopy();
@@ -723,61 +783,74 @@ public abstract class Liastar {
     }
   }
 
-  Liastar mkConjunction(boolean innerStar, ArrayList<Liastar> conjs) {
-    Liastar result = null;
-    for(Liastar lit : conjs) {
-      if(lit != null) {
+  public static LiaStar mkConjunction(boolean innerStar, List<LiaStar> conjs) {
+    LiaStar result = null;
+    for (LiaStar lit : conjs) {
+      if (lit != null) {
         result = (result == null) ? lit.deepcopy() : mkAnd(innerStar, result, lit.deepcopy());
       }
     }
-    if(result == null) {
-      return mkEq(innerStar, mkConst(innerStar, 0), mkConst(innerStar, 0));
+    if (result == null) {
+      return mkTrue(innerStar);
     } else {
       return result;
     }
   }
 
+  public static LiaStar mkDisjunction(boolean innerStar, List<LiaStar> disjs) {
+    LiaStar result = null;
+    for (LiaStar lit : disjs) {
+      if (lit != null) {
+        result = (result == null) ? lit.deepcopy() : mkOr(innerStar, result, lit.deepcopy());
+      }
+    }
+    if (result == null) {
+      return mkFalse(innerStar);
+    } else {
+      return result;
+    }
+  }
 
-  public static Liastar allOuterVarEqZero(ArrayList<String> outerVector) {
-    Liastar result = null;
+  public static LiaStar allOuterVarEqZero(ArrayList<String> outerVector) {
+    LiaStar result = null;
     for(String var : outerVector) {
-      Liastar tmp = mkEq(false, mkVar(false, var), mkConst(false, 0));
+      LiaStar tmp = mkEq(false, mkVar(false, var), mkConst(false, 0));
       result = (result == null) ? tmp : mkAnd(false, result, tmp);
     }
     return result;
   }
 
 
-  public static Liastar innerVarEqOuterVar(ArrayList<String> outerVector, ArrayList<String> innerVector) {
-    Liastar result = null;
+  public static LiaStar innerVarEqOuterVar(ArrayList<String> outerVector, ArrayList<String> innerVector) {
+    LiaStar result = null;
     for(int i = 0; i < outerVector.size(); ++ i) {
       String outVar = outerVector.get(i);
       String inVar = innerVector.get(i);
-      Liastar tmp = mkEq(false, mkVar(false, outVar), mkVar(false, inVar));
+      LiaStar tmp = mkEq(false, mkVar(false, outVar), mkVar(false, inVar));
       result = (result == null) ? tmp : mkAnd(false, result, tmp);
     }
     return result;
   }
 
 
-  public static Liastar expandStarWithUnderapp(Liastar formula, int m) {
+  public static LiaStar expandStarWithUnderapp(LiaStar formula, int m) {
     switch (formula.getType()) {
       case LCONST: case LEQ: case LNOT: case LITE: case LLT: case LLE: case LVAR: case LMULT: case LPLUS: {
         return formula;
       }
       case LOR: {
-        LiaorImpl orLia = (LiaorImpl) formula;
+        LiaOrImpl orLia = (LiaOrImpl) formula;
         return mkOr(false, expandStarWithUnderapp(orLia.operand1, m), expandStarWithUnderapp(orLia.operand2, m));
       }
       case LAND: {
-        LiaandImpl andLia = (LiaandImpl) formula;
+        LiaAndImpl andLia = (LiaAndImpl) formula;
         return mkAnd(false, expandStarWithUnderapp(andLia.operand1, m), expandStarWithUnderapp(andLia.operand2, m));
       }
       case LSUM: {
-        LiasumImpl sumLia = (LiasumImpl) formula;
-        Liastar case1 = allOuterVarEqZero(sumLia.outerVector);
-        Liastar case2Part1 = innerVarEqOuterVar(sumLia.outerVector, sumLia.innerVector);
-        Liastar case2Part2 = expandStarWithUnderapp(sumLia.constraints, m);
+        LiaSumImpl sumLia = (LiaSumImpl) formula;
+        LiaStar case1 = allOuterVarEqZero(sumLia.outerVector);
+        LiaStar case2Part1 = innerVarEqOuterVar(sumLia.outerVector, sumLia.innerVector);
+        LiaStar case2Part2 = expandStarWithUnderapp(sumLia.constraints, m);
         return mkOr(false, case1, mkAnd(false, case2Part1, case2Part2));
       }
       default: {
@@ -787,83 +860,83 @@ public abstract class Liastar {
     }
   }
 
-  public static Liastar constructConjunctions(boolean innerStar, List<Liastar> formulas) {
-    Liastar result = null;
-    for (Liastar f : formulas) {
+  public static LiaStar constructConjunctions(boolean innerStar, List<LiaStar> formulas) {
+    LiaStar result = null;
+    for (LiaStar f : formulas) {
       if (f == null) continue;
-      result = (result == null) ? f : Liastar.mkAnd(innerStar, result, f);
+      result = (result == null) ? f : LiaStar.mkAnd(innerStar, result, f);
     }
     return result;
   }
 
-  public static Liastar replaceVars(Liastar formula, HashMap<String, String> oldToNewVars) {
+  public static LiaStar replaceVars(LiaStar formula, HashMap<String, String> oldToNewVars) {
     if(formula == null) {
       return formula;
     }
     switch(formula.getType()) {
       case LEQ -> {
-        LiaeqImpl tmp = (LiaeqImpl) formula;
-        Liastar left = replaceVars(tmp.operand1, oldToNewVars);
-        Liastar right = replaceVars(tmp.operand2, oldToNewVars);
-        return Liastar.mkEq(tmp.innerStar, left, right);
+        LiaEqImpl tmp = (LiaEqImpl) formula;
+        LiaStar left = replaceVars(tmp.operand1, oldToNewVars);
+        LiaStar right = replaceVars(tmp.operand2, oldToNewVars);
+        return LiaStar.mkEq(tmp.innerStar, left, right);
       }
       case LLE -> {
-        LialeImpl tmp = (LialeImpl) formula;
-        Liastar left = replaceVars(tmp.operand1, oldToNewVars);
-        Liastar right = replaceVars(tmp.operand2, oldToNewVars);
-        return Liastar.mkLe(tmp.innerStar, left, right);
+        LiaLeImpl tmp = (LiaLeImpl) formula;
+        LiaStar left = replaceVars(tmp.operand1, oldToNewVars);
+        LiaStar right = replaceVars(tmp.operand2, oldToNewVars);
+        return LiaStar.mkLe(tmp.innerStar, left, right);
       }
       case LLT -> {
-        LialtImpl tmp = (LialtImpl) formula;
-        Liastar left = replaceVars(tmp.operand1, oldToNewVars);
-        Liastar right = replaceVars(tmp.operand2, oldToNewVars);
-        return Liastar.mkLt(tmp.innerStar, left, right);
+        LiaLtImpl tmp = (LiaLtImpl) formula;
+        LiaStar left = replaceVars(tmp.operand1, oldToNewVars);
+        LiaStar right = replaceVars(tmp.operand2, oldToNewVars);
+        return LiaStar.mkLt(tmp.innerStar, left, right);
       }
       case LOR -> {
-        LiaorImpl tmp = (LiaorImpl) formula;
-        Liastar left = replaceVars(tmp.operand1, oldToNewVars);
-        Liastar right = replaceVars(tmp.operand2, oldToNewVars);
-        return Liastar.mkOr(tmp.innerStar, left, right);
+        LiaOrImpl tmp = (LiaOrImpl) formula;
+        LiaStar left = replaceVars(tmp.operand1, oldToNewVars);
+        LiaStar right = replaceVars(tmp.operand2, oldToNewVars);
+        return LiaStar.mkOr(tmp.innerStar, left, right);
       }
       case LAND -> {
-        LiaandImpl tmp = (LiaandImpl) formula;
-        Liastar left = replaceVars(tmp.operand1, oldToNewVars);
-        Liastar right = replaceVars(tmp.operand2, oldToNewVars);
-        return Liastar.mkAnd(tmp.innerStar, left, right);
+        LiaAndImpl tmp = (LiaAndImpl) formula;
+        LiaStar left = replaceVars(tmp.operand1, oldToNewVars);
+        LiaStar right = replaceVars(tmp.operand2, oldToNewVars);
+        return LiaStar.mkAnd(tmp.innerStar, left, right);
       }
       case LITE -> {
-        LiaiteImpl tmp = (LiaiteImpl) formula;
-        Liastar cond = replaceVars(tmp.cond, oldToNewVars);
-        Liastar operand1 = replaceVars(tmp.operand1, oldToNewVars);
-        Liastar operand2 = replaceVars(tmp.operand2, oldToNewVars);
-        return Liastar.mkIte(tmp.innerStar, cond, operand1, operand2);
+        LiaIteImpl tmp = (LiaIteImpl) formula;
+        LiaStar cond = replaceVars(tmp.cond, oldToNewVars);
+        LiaStar operand1 = replaceVars(tmp.operand1, oldToNewVars);
+        LiaStar operand2 = replaceVars(tmp.operand2, oldToNewVars);
+        return LiaStar.mkIte(tmp.innerStar, cond, operand1, operand2);
       }
       case LNOT -> {
-        LianotImpl tmp = (LianotImpl) formula;
-        Liastar operand = replaceVars(tmp.operand, oldToNewVars);
-        return Liastar.mkNot(tmp.innerStar, operand);
+        LiaNotImpl tmp = (LiaNotImpl) formula;
+        LiaStar operand = replaceVars(tmp.operand, oldToNewVars);
+        return LiaStar.mkNot(tmp.innerStar, operand);
       }
       case LVAR -> {
-        LiavarImpl tmp = (LiavarImpl) formula;
+        LiaVarImpl tmp = (LiaVarImpl) formula;
         if(oldToNewVars.keySet().contains(tmp.varName)) {
           return mkVar(tmp.innerStar, oldToNewVars.get(tmp.varName));
         }
         return mkVar(tmp.innerStar, tmp.varName);
       }
       case LMULT -> {
-        LiamultImpl tmp = (LiamultImpl) formula;
-        Liastar operand1 = replaceVars(tmp.operand1, oldToNewVars);
-        Liastar operand2 = replaceVars(tmp.operand2, oldToNewVars);
-        return Liastar.mkMult(tmp.innerStar, operand1, operand2);
+        LiaMulImpl tmp = (LiaMulImpl) formula;
+        LiaStar operand1 = replaceVars(tmp.operand1, oldToNewVars);
+        LiaStar operand2 = replaceVars(tmp.operand2, oldToNewVars);
+        return LiaStar.mkMult(tmp.innerStar, operand1, operand2);
       }
       case LPLUS -> {
-        LiaplusImpl tmp = (LiaplusImpl) formula;
-        Liastar operand1 = replaceVars(tmp.operand1, oldToNewVars);
-        Liastar operand2 = replaceVars(tmp.operand2, oldToNewVars);
-        return Liastar.mkPlus(tmp.innerStar, operand1, operand2);
+        LiaPlusImpl tmp = (LiaPlusImpl) formula;
+        LiaStar operand1 = replaceVars(tmp.operand1, oldToNewVars);
+        LiaStar operand2 = replaceVars(tmp.operand2, oldToNewVars);
+        return LiaStar.mkPlus(tmp.innerStar, operand1, operand2);
       }
       case LSUM -> {
-        LiasumImpl sum = (LiasumImpl) formula;
+        LiaSumImpl sum = (LiaSumImpl) formula;
         ArrayList<String> newOuterVars = new ArrayList<>();
         for (String outerVar : sum.outerVector) {
           newOuterVars.add(oldToNewVars.keySet().contains(outerVar) ? oldToNewVars.get(outerVar) : outerVar);
@@ -872,7 +945,7 @@ public abstract class Liastar {
         for (String innerVar : sum.innerVector) {
           newInnerVars.add(oldToNewVars.keySet().contains(innerVar) ? oldToNewVars.get(innerVar) : innerVar);
         }
-        return Liastar.mkSum(formula.innerStar, newOuterVars, newInnerVars, replaceVars(sum.constraints, oldToNewVars));
+        return LiaStar.mkSum(formula.innerStar, newOuterVars, newInnerVars, replaceVars(sum.constraints, oldToNewVars));
       }
       default -> {
         return formula;
@@ -880,7 +953,7 @@ public abstract class Liastar {
     }
   }
 
-  public static Liastar renameAllVars(Liastar expr, HashSet<String> exceptVars) {
+  public static LiaStar renameAllVars(LiaStar expr, HashSet<String> exceptVars) {
     Set<String> allVars = expr.getVars();
     HashMap<String, String> oldNameToNewName = new HashMap<>();
     for (String oldName : allVars) {
@@ -891,7 +964,7 @@ public abstract class Liastar {
     return replaceVars(expr, oldNameToNewName);
   }
 
-  public Liastar subformulaWithoutStar() {
+  public LiaStar subformulaWithoutStar() {
     return this;
   }
 
@@ -900,7 +973,13 @@ public abstract class Liastar {
    * The method should create new instances of LIA* formulas
    * to avoid modification of their fields.
    */
-  public abstract Liastar transformPostOrder(Function<Liastar, Liastar> transformer);
+  public abstract LiaStar transformPostOrder(Function<LiaStar, LiaStar> transformer);
+
+  public abstract LiaStar transformPostOrder(BiFunction<LiaStar, LiaStar, LiaStar> transformer, LiaStar parent);
+
+  public LiaStar transformPostOrder(BiFunction<LiaStar, LiaStar, LiaStar> transformer) {
+    return transformPostOrder(transformer, null);
+  }
 
   @Override
   public String toString() {
@@ -912,7 +991,7 @@ public abstract class Liastar {
 
 
   protected static void prettyPrintBinaryOp(PrettyBuilder builder,
-                                            Liastar operand1, Liastar operand2,
+                                            LiaStar operand1, LiaStar operand2,
                                             boolean needsParen1, boolean needsParen2,
                                             String op) {
     prettyPrintBinaryOp(builder, operand1, operand2,
@@ -920,7 +999,7 @@ public abstract class Liastar {
   }
 
   protected static void prettyPrintBinaryOp(PrettyBuilder builder,
-                                            Liastar operand1, Liastar operand2,
+                                            LiaStar operand1, LiaStar operand2,
                                             boolean needsParen1, boolean needsParen2,
                                             boolean autoNewLine,
                                             String op) {
@@ -933,11 +1012,11 @@ public abstract class Liastar {
 
   /** autoNewLine: whether auto new line between operands is allowed */
   protected static void prettyPrintBinaryOp(PrettyBuilder builder,
-                                     Liastar operand1, Liastar operand2,
-                                     boolean needsParen1, boolean needsParen2,
-                                     boolean multiLine1, boolean multiLine2,
-                                     boolean autoNewLine,
-                                     String op) {
+                                            LiaStar operand1, LiaStar operand2,
+                                            boolean needsParen1, boolean needsParen2,
+                                            boolean multiLine1, boolean multiLine2,
+                                            boolean autoNewLine,
+                                            String op) {
     if (needsParen1) {
       if (multiLine1) {
         builder.print("(").indent(4).println();
@@ -994,70 +1073,70 @@ public abstract class Liastar {
     return result;
   }
 
-  public static Liastar eqNVectors(boolean innerStar, ArrayList<String> leftVector, ArrayList<ArrayList<String>> rightVectors) {
-    Liastar result = null;
+  public static LiaStar eqNVectors(boolean innerStar, ArrayList<String> leftVector, ArrayList<ArrayList<String>> rightVectors) {
+    LiaStar result = null;
     for (int i = 0; i < leftVector.size(); ++ i) {
-      LiavarImpl leftVar = (LiavarImpl) mkVar(innerStar, leftVector.get(i));
-      Liastar rightPlusFormula = null;
+      LiaVarImpl leftVar = (LiaVarImpl) mkVar(innerStar, leftVector.get(i));
+      LiaStar rightPlusFormula = null;
       for (int j = 0; j < rightVectors.size(); ++ j) {
-        LiavarImpl rightVar = (LiavarImpl) mkVar(innerStar, rightVectors.get(j).get(i));
+        LiaVarImpl rightVar = (LiaVarImpl) mkVar(innerStar, rightVectors.get(j).get(i));
         rightPlusFormula = (rightPlusFormula == null) ? rightVar : mkPlus(innerStar, rightPlusFormula, rightVar);
       }
-      Liastar leftEqRight = mkEq(innerStar, leftVar, rightPlusFormula);
+      LiaStar leftEqRight = mkEq(innerStar, leftVar, rightPlusFormula);
       result = (result == null) ? leftEqRight : mkAnd(innerStar, result, leftEqRight);
     }
     return result;
   }
 
-  public static Liastar calculateUnderApprox(Liastar formula, int n) {
-    Liastar result = spanLiastarByNVectors(formula, n);
+  public static LiaStar calculateUnderApprox(LiaStar formula, int n) {
+    LiaStar result = spanLiastarByNVectors(formula, n);
     return expandStarWithUnderapp(result, 1);
   }
 
-  public static Liastar spanLiastarByNVectors(Liastar formula, int n) {
+  public static LiaStar spanLiastarByNVectors(LiaStar formula, int n) {
     switch (formula.getType()) {
       case LPLUS: case LMULT: case LVAR: case LLT: case LLE: case LEQ: case LDIV: case LCONST: case LSTRING: case LFUNC: {
         return formula;
       }
       case LOR: {
-        LiaorImpl orFormula = (LiaorImpl) formula;
+        LiaOrImpl orFormula = (LiaOrImpl) formula;
         orFormula.operand1 = spanLiastarByNVectors(orFormula.operand1, n);
         orFormula.operand2 = spanLiastarByNVectors(orFormula.operand2, n);
         return orFormula;
       }
       case LAND: {
-        LiaandImpl andFormula = (LiaandImpl) formula;
+        LiaAndImpl andFormula = (LiaAndImpl) formula;
         andFormula.operand1 = spanLiastarByNVectors(andFormula.operand1, n);
         andFormula.operand2 = spanLiastarByNVectors(andFormula.operand2, n);
         return andFormula;
       }
       case LITE: {
-        LiaiteImpl iteFormula = (LiaiteImpl) formula;
+        LiaIteImpl iteFormula = (LiaIteImpl) formula;
         iteFormula.cond = spanLiastarByNVectors(iteFormula.cond, n);
         return iteFormula;
       }
       case LNOT: {
-        LianotImpl notFormula = (LianotImpl) formula;
+        LiaNotImpl notFormula = (LiaNotImpl) formula;
         notFormula.operand = spanLiastarByNVectors(notFormula.operand, n);
         return notFormula;
       }
       case LSUM: {
-        LiasumImpl sumFormula = (LiasumImpl) formula;
+        LiaSumImpl sumFormula = (LiaSumImpl) formula;
         ArrayList<ArrayList<String>> newNameVectors = new ArrayList<>();
         for (int i = 0; i < n; ++ i) {
           newNameVectors.add(newNVarNames(sumFormula.outerVector.size()));
         }
-        Liastar outerEqSumOfNVectors = eqNVectors(sumFormula.innerStar, sumFormula.outerVector, newNameVectors);
-        Liastar newLiasumFormulas = null;
+        LiaStar outerEqSumOfNVectors = eqNVectors(sumFormula.innerStar, sumFormula.outerVector, newNameVectors);
+        LiaStar newLiasumFormulas = null;
         for (int i = 0; i < n; ++ i) {
           ArrayList<String> newOuterNames = newNameVectors.get(i);
-          LiasumImpl tmpSumFormula = (LiasumImpl) sumFormula.deepcopy();
+          LiaSumImpl tmpSumFormula = (LiaSumImpl) sumFormula.deepcopy();
           tmpSumFormula.outerVector = newOuterNames;
-          tmpSumFormula = (LiasumImpl) renameAllInnerVars(tmpSumFormula);
+          tmpSumFormula = (LiaSumImpl) renameAllInnerVars(tmpSumFormula);
           tmpSumFormula.constraints = spanLiastarByNVectors(tmpSumFormula.constraints, n);
           newLiasumFormulas = (newLiasumFormulas == null) ? tmpSumFormula : mkAnd(sumFormula.innerStar, newLiasumFormulas, tmpSumFormula);
         }
-        Liastar result = mkAnd(sumFormula.innerStar, outerEqSumOfNVectors, newLiasumFormulas);
+        LiaStar result = mkAnd(sumFormula.innerStar, outerEqSumOfNVectors, newLiasumFormulas);
         return result;
       }
       default: {
@@ -1068,40 +1147,40 @@ public abstract class Liastar {
     }
   }
 
-  public static Liastar renameAllInnerVars(Liastar formula) {
+  public static LiaStar renameAllInnerVars(LiaStar formula) {
     switch (formula.getType()) {
       case LFUNC: case LSTRING: case LCONST: case LDIV: case LEQ: case LLE: case LLT: case LVAR: case LMULT: case LPLUS: {
          return formula;
       }
       case LOR: {
-        LiaorImpl orFormula = (LiaorImpl) formula;
+        LiaOrImpl orFormula = (LiaOrImpl) formula;
         orFormula.operand1 = renameAllInnerVars(orFormula.operand1);
         orFormula.operand2 = renameAllInnerVars(orFormula.operand2);
         return orFormula;
       }
       case LAND: {
-        LiaandImpl andFormula = (LiaandImpl) formula;
+        LiaAndImpl andFormula = (LiaAndImpl) formula;
         andFormula.operand1 = renameAllInnerVars(andFormula.operand1);
         andFormula.operand2 = renameAllInnerVars(andFormula.operand2);
         return andFormula;
       }
       case LITE: {
-        LiaiteImpl iteFormula = (LiaiteImpl) formula;
+        LiaIteImpl iteFormula = (LiaIteImpl) formula;
         iteFormula.cond = renameAllInnerVars(iteFormula.cond);
         return iteFormula;
       }
       case LNOT: {
-        LianotImpl notFormula = (LianotImpl) formula;
+        LiaNotImpl notFormula = (LiaNotImpl) formula;
         notFormula.operand = renameAllInnerVars(notFormula.operand);
         return notFormula;
       }
       case LSUM: {
-        LiasumImpl sumFormula = (LiasumImpl) formula;
+        LiaSumImpl sumFormula = (LiaSumImpl) formula;
         HashMap<String, String> renameMapping = new HashMap<>();
         for (String innerVarName : sumFormula.innerVector) {
           renameMapping.put(innerVarName, newVarName());
         }
-        sumFormula = (LiasumImpl) replaceVars(sumFormula, renameMapping);
+        sumFormula = (LiaSumImpl) replaceVars(sumFormula, renameMapping);
         sumFormula.constraints = renameAllInnerVars(sumFormula.constraints);
         return sumFormula;
       }
@@ -1112,5 +1191,4 @@ public abstract class Liastar {
       }
     }
   }
-
 }

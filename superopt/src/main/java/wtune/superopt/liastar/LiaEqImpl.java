@@ -4,16 +4,18 @@ import com.microsoft.z3.*;
 import wtune.superopt.util.PrettyBuilder;
 
 import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
-public class LiaeqImpl extends Liastar {
+public class LiaEqImpl extends LiaStar {
 
-  Liastar operand1;
-  Liastar operand2;
+  LiaStar operand1;
+  LiaStar operand2;
 
 
-  LiaeqImpl(Liastar op1, Liastar op2) {
+  LiaEqImpl(LiaStar op1, LiaStar op2) {
     operand1 = op1;
     operand2 = op2;
   }
@@ -22,6 +24,13 @@ public class LiaeqImpl extends Liastar {
   public Set<String> collectVarSet() {
     Set<String> varSet = operand1.collectVarSet();
     varSet.addAll(operand2.collectVarSet());
+    return varSet;
+  }
+
+  @Override
+  public Set<String> collectAllVars() {
+    Set<String> varSet = operand1.collectAllVars();
+    varSet.addAll(operand2.collectAllVars());
     return varSet;
   }
 
@@ -55,29 +64,29 @@ public class LiaeqImpl extends Liastar {
   }
 
   @Override
-  public Liastar deepcopy() {
+  public LiaStar deepcopy() {
     return mkEq(innerStar, operand1.deepcopy(), operand2.deepcopy());
   }
 
   @Override
-  public Liastar mergeMult(HashMap<LiamultImpl, String> multToVar) {
+  public LiaStar mergeMult(HashMap<LiaMulImpl, String> multToVar) {
     operand1 = operand1.mergeMult(multToVar);
     operand2 = operand2.mergeMult(multToVar);
     return this;
   }
 
   @Override
-  public Liastar multToBin(int n) {
+  public LiaStar multToBin(int n) {
     operand1 = operand1.multToBin(n);
     operand2 = operand2.multToBin(n);
     return this;
   }
 
   @Override
-  public Liastar simplifyMult(HashMap<Liastar, String> multToVar) {
+  public LiaStar simplifyMult(HashMap<LiaStar, String> multToVar) {
     operand1.innerStar = innerStar;
     operand2.innerStar = innerStar;
-    Liastar[] tmp = new Liastar[2];
+    LiaStar[] tmp = new LiaStar[2];
     tmp[0] = operand1.simplifyMult(multToVar);
     tmp[1] = operand2.simplifyMult(multToVar);
     return liaAndConcat(tmp);
@@ -89,9 +98,9 @@ public class LiaeqImpl extends Liastar {
       return true;
     if(that == null)
       return false;
-    if(!(that instanceof LiaeqImpl))
+    if(!(that instanceof LiaEqImpl))
       return false;
-    LiaeqImpl tmp = (LiaeqImpl) that;
+    LiaEqImpl tmp = (LiaEqImpl) that;
     return operand1.equals(tmp.operand1) && operand2.equals(tmp.operand2);
   }
 
@@ -101,14 +110,14 @@ public class LiaeqImpl extends Liastar {
   }
 
   @Override
-  public Liastar expandStar() throws Exception {
+  public LiaStar expandStar() {
     return this;
   }
 
   @Override
-  public Expr transToSMT(Context ctx, HashMap<String, IntExpr> varsName) {
-    Expr c1 = operand1.transToSMT(ctx, varsName);
-    Expr c2 = operand2.transToSMT(ctx, varsName);
+  public Expr transToSMT(Context ctx, Map<String, IntExpr> varsName, Map<String, FuncDecl> funcsName) {
+    Expr c1 = operand1.transToSMT(ctx, varsName, funcsName);
+    Expr c2 = operand2.transToSMT(ctx, varsName, funcsName);
     return ctx.mkEq(c1, c2);
   }
 
@@ -135,15 +144,15 @@ public class LiaeqImpl extends Liastar {
 
 
   @Override
-  public Liastar simplifyIte() {
+  public LiaStar simplifyIte() {
     operand1 = operand1.simplifyIte();
     operand2 = operand2.simplifyIte();
 
-    if(operand1 instanceof LiaiteImpl) {
-      LiaiteImpl iteLia = (LiaiteImpl) operand1;
-      Liastar iteOp1 = iteLia.operand1;
-      Liastar iteOp2 = iteLia.operand2;
-      if((iteOp1 instanceof LiaconstImpl) && (iteOp2 instanceof LiaconstImpl)) {
+    if(operand1 instanceof LiaIteImpl) {
+      LiaIteImpl iteLia = (LiaIteImpl) operand1;
+      LiaStar iteOp1 = iteLia.operand1;
+      LiaStar iteOp2 = iteLia.operand2;
+      if((iteOp1 instanceof LiaConstImpl) && (iteOp2 instanceof LiaConstImpl)) {
         if (iteOp1.equals(operand2)) {
           return iteLia.cond.deepcopy();
         } else if (iteOp2.equals(operand2)) {
@@ -161,10 +170,17 @@ public class LiaeqImpl extends Liastar {
   }
 
   @Override
-  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
-    Liastar operand10 = operand1.transformPostOrder(transformer);
-    Liastar operand20 = operand2.transformPostOrder(transformer);
+  public LiaStar transformPostOrder(Function<LiaStar, LiaStar> transformer) {
+    LiaStar operand10 = operand1.transformPostOrder(transformer);
+    LiaStar operand20 = operand2.transformPostOrder(transformer);
     return transformer.apply(mkEq(innerStar, operand10, operand20));
+  }
+
+  @Override
+  public LiaStar transformPostOrder(BiFunction<LiaStar, LiaStar, LiaStar> transformer, LiaStar parent) {
+    LiaStar operand10 = operand1.transformPostOrder(transformer, this);
+    LiaStar operand20 = operand2.transformPostOrder(transformer, this);
+    return transformer.apply(mkEq(innerStar, operand10, operand20), parent);
   }
 
 }

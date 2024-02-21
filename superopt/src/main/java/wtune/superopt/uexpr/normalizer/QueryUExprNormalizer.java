@@ -4,7 +4,7 @@ import wtune.common.utils.NaturalCongruence;
 import wtune.sql.plan.Value;
 import wtune.sql.schema.Schema;
 import wtune.sql.schema.Table;
-import wtune.superopt.liastar.Liastar;
+import wtune.superopt.liastar.LiaStar;
 import wtune.superopt.logic.CASTSupport;
 import wtune.superopt.uexpr.*;
 
@@ -267,7 +267,7 @@ public class QueryUExprNormalizer extends UNormalization {
     }
 
     final UVar curVar = smallBoundVars.get(cur);
-    final UVar newVar = UVar.mkBase(UName.mk(Liastar.newVarName()));
+    final UVar newVar = UVar.mkBase(UName.mk(LiaStar.newVarName()));
     smallBody = smallBody.replaceVar(curVar, newVar, true);
 
     for (UVar v : bigBoundVars) {

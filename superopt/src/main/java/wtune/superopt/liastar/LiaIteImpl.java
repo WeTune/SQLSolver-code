@@ -4,16 +4,17 @@ import com.microsoft.z3.*;
 import wtune.superopt.util.PrettyBuilder;
 
 import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
-public class LiaiteImpl extends Liastar {
+public class LiaIteImpl extends LiaStar {
 
-  Liastar cond;
-  Liastar operand1;
-  Liastar operand2;
+  LiaStar cond;
+  LiaStar operand1;
+  LiaStar operand2;
 
 
-  LiaiteImpl(Liastar c, Liastar op1, Liastar op2) {
+  LiaIteImpl(LiaStar c, LiaStar op1, LiaStar op2) {
     cond = c;
     operand1 = op1;
     operand2 = op2;
@@ -24,6 +25,14 @@ public class LiaiteImpl extends Liastar {
     Set<String> varSet = operand1.collectVarSet();
     varSet.addAll(operand2.collectVarSet());
     varSet.addAll(cond.collectVarSet());
+    return varSet;
+  }
+
+  @Override
+  public Set<String> collectAllVars() {
+    Set<String> varSet = operand1.collectAllVars();
+    varSet.addAll(operand2.collectAllVars());
+    varSet.addAll(cond.collectAllVars());
     return varSet;
   }
 
@@ -76,12 +85,12 @@ public class LiaiteImpl extends Liastar {
   }
 
   @Override
-  public Liastar deepcopy() {
+  public LiaStar deepcopy() {
     return mkIte(innerStar, cond.deepcopy(), operand1.deepcopy(), operand2.deepcopy());
   }
 
   @Override
-  public Liastar mergeMult(HashMap<LiamultImpl, String> multToVar) {
+  public LiaStar mergeMult(HashMap<LiaMulImpl, String> multToVar) {
     cond = cond.mergeMult(multToVar);
     operand1 = operand1.mergeMult(multToVar);
     operand2 = operand2.mergeMult(multToVar);
@@ -90,7 +99,7 @@ public class LiaiteImpl extends Liastar {
 
 
   @Override
-  public Liastar multToBin(int n) {
+  public LiaStar multToBin(int n) {
     cond = cond.multToBin(n);
     operand1 = operand1.multToBin(n);
     operand2 = operand2.multToBin(n);
@@ -103,9 +112,9 @@ public class LiaiteImpl extends Liastar {
       return true;
     if(that == null)
       return false;
-    if(!(that instanceof LiaiteImpl))
+    if(!(that instanceof LiaIteImpl))
       return false;
-    LiaiteImpl tmp = (LiaiteImpl) that;
+    LiaIteImpl tmp = (LiaIteImpl) that;
     return cond.equals(tmp.cond) && operand1.equals(tmp.operand1) && operand2.equals(tmp.operand2);
   }
 
@@ -115,12 +124,12 @@ public class LiaiteImpl extends Liastar {
   }
 
   @Override
-  public Liastar simplifyMult(HashMap<Liastar, String> multToVar) {
+  public LiaStar simplifyMult(HashMap<LiaStar, String> multToVar) {
     cond.innerStar = innerStar;
     operand1.innerStar = innerStar;
     operand2.innerStar = innerStar;
 
-    Liastar[] tmp = new Liastar[3];
+    LiaStar[] tmp = new LiaStar[3];
     tmp[0] = cond.simplifyMult(multToVar);
     tmp[1] = operand1.simplifyMult(multToVar);
     tmp[2] = operand2.simplifyMult(multToVar);
@@ -131,8 +140,8 @@ public class LiaiteImpl extends Liastar {
   public boolean binIte() {
     if( operand1.getType().equals(LiaOpType.LCONST) &&
         operand2.getType().equals(LiaOpType.LCONST) ) {
-      LiaconstImpl c1 = (LiaconstImpl) operand1;
-      LiaconstImpl c2 = (LiaconstImpl) operand2;
+      LiaConstImpl c1 = (LiaConstImpl) operand1;
+      LiaConstImpl c2 = (LiaConstImpl) operand2;
       if( c1.getValue() <= 1 && c2.getValue() <= 1)
         return true;
       else
@@ -142,25 +151,25 @@ public class LiaiteImpl extends Liastar {
   }
 
   @Override
-  public Liastar expandStar() throws Exception {
+  public LiaStar expandStar() {
     return this;
   }
 
   @Override
-  public Expr transToSMT(Context ctx, HashMap<String, IntExpr> varsName) {
-    BoolExpr f = (BoolExpr) cond.transToSMT(ctx, varsName);
-    Expr one = operand1.transToSMT(ctx, varsName);
-    Expr two = operand2.transToSMT(ctx, varsName);
+  public Expr transToSMT(Context ctx, Map<String, IntExpr> varsName, Map<String, FuncDecl> funcsName) {
+    BoolExpr f = (BoolExpr) cond.transToSMT(ctx, varsName, funcsName);
+    Expr one = operand1.transToSMT(ctx, varsName, funcsName);
+    Expr two = operand2.transToSMT(ctx, varsName, funcsName);
     return ctx.mkITE(f, one, two);
   }
 
-  static Liastar multIteOneOp(boolean innerStar, Liastar operand, Liastar f) {
+  static LiaStar multIteOneOp(boolean innerStar, LiaStar operand, LiaStar f) {
     if(operand.isConstV(1)) {
       return f.deepcopy();
-    } else if(operand instanceof LiaiteImpl) {
-      return ((LiaiteImpl) operand).MultIte(f);
-    } else if(f instanceof LiaiteImpl) {
-      return ((LiaiteImpl) f.deepcopy()).MultIte(operand);
+    } else if(operand instanceof LiaIteImpl) {
+      return ((LiaIteImpl) operand).MultIte(f);
+    } else if(f instanceof LiaIteImpl) {
+      return ((LiaIteImpl) f.deepcopy()).MultIte(operand);
     } else if(!operand.isConstV(0)){
       return mkMult(innerStar, operand, f).deepcopy();
     } else {
@@ -168,15 +177,15 @@ public class LiaiteImpl extends Liastar {
     }
   }
 
-  public Liastar MultIte(Liastar f) {
+  public LiaStar MultIte(LiaStar f) {
     if(f.isConstV(1)) {
       return this;
     } else if(f.isConstV(0)) {
       return f.deepcopy();
     }
 
-    if(f instanceof LiaiteImpl) {
-      LiaiteImpl fIte = (LiaiteImpl) f;
+    if(f instanceof LiaIteImpl) {
+      LiaIteImpl fIte = (LiaIteImpl) f;
       if(fIte.cond.equals(cond)) {
         operand1 = multIteOneOp(innerStar, operand1, fIte.operand1);
         operand2 = multIteOneOp(innerStar, operand2, fIte.operand2);
@@ -190,26 +199,26 @@ public class LiaiteImpl extends Liastar {
     return this;
   }
 
-  static Liastar plusIteOneOp(boolean innerStar, Liastar operand, Liastar f) {
-    if(operand instanceof LiaiteImpl) {
-      return ((LiaiteImpl) operand).plusIte(f);
-    } else if(f instanceof LiaiteImpl) {
-      return ((LiaiteImpl) f.deepcopy()).plusIte(operand);
+  static LiaStar plusIteOneOp(boolean innerStar, LiaStar operand, LiaStar f) {
+    if(operand instanceof LiaIteImpl) {
+      return ((LiaIteImpl) operand).plusIte(f);
+    } else if(f instanceof LiaIteImpl) {
+      return ((LiaIteImpl) f.deepcopy()).plusIte(operand);
     } else {
       return mkPlus(innerStar, operand, f).deepcopy();
     }
   }
 
-  public Liastar plusIte(Liastar f) {
+  public LiaStar plusIte(LiaStar f) {
     if(f.isConstV(0)) {
       return this;
     }
 
-    if(f instanceof LiaiteImpl) {
-      LiaiteImpl fIte = (LiaiteImpl) f;
+    if(f instanceof LiaIteImpl) {
+      LiaIteImpl fIte = (LiaIteImpl) f;
       if(fIte.cond.equals(cond)) {
-        Liastar fop1 = fIte.operand1;
-        Liastar fop2 = fIte.operand2;
+        LiaStar fop1 = fIte.operand1;
+        LiaStar fop2 = fIte.operand2;
         operand1 = plusIteOneOp(innerStar, operand1, fop1);
         operand2 = plusIteOneOp(innerStar, operand2, fop2);
         return this;
@@ -223,7 +232,7 @@ public class LiaiteImpl extends Liastar {
   @Override
   public EstimateResult estimate() {
     EstimateResult rc = cond.estimate();
-    EstimateResult rn = Liastar.mkNot(innerStar, cond).estimate();
+    EstimateResult rn = LiaStar.mkNot(innerStar, cond).estimate();
     EstimateResult r1 = operand1.estimate();
     EstimateResult r2 = operand2.estimate();
     rc.vars.addAll(r1.vars);
@@ -246,7 +255,7 @@ public class LiaiteImpl extends Liastar {
   }
 
   @Override
-  public Liastar simplifyIte() {
+  public LiaStar simplifyIte() {
     cond = cond.simplifyIte();
     operand1 = operand1.simplifyIte();
     operand2 = operand2.simplifyIte();
@@ -268,11 +277,19 @@ public class LiaiteImpl extends Liastar {
   }
 
   @Override
-  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
-    Liastar cond0 = cond.transformPostOrder(transformer);
-    Liastar operand10 = operand1.transformPostOrder(transformer);
-    Liastar operand20 = operand2.transformPostOrder(transformer);
+  public LiaStar transformPostOrder(Function<LiaStar, LiaStar> transformer) {
+    LiaStar cond0 = cond.transformPostOrder(transformer);
+    LiaStar operand10 = operand1.transformPostOrder(transformer);
+    LiaStar operand20 = operand2.transformPostOrder(transformer);
     return transformer.apply(mkIte(innerStar, cond0, operand10, operand20));
+  }
+
+  @Override
+  public LiaStar transformPostOrder(BiFunction<LiaStar, LiaStar, LiaStar> transformer, LiaStar parent) {
+    LiaStar cond0 = cond.transformPostOrder(transformer, this);
+    LiaStar operand10 = operand1.transformPostOrder(transformer, this);
+    LiaStar operand20 = operand2.transformPostOrder(transformer, this);
+    return transformer.apply(mkIte(innerStar, cond0, operand10, operand20), parent);
   }
 
 }

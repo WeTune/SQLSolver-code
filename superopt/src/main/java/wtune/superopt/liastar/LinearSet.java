@@ -1,9 +1,6 @@
 package wtune.superopt.liastar;
 
-import com.microsoft.z3.*;
-
 import java.util.ArrayList;
-import java.util.HashMap;
 
 public class LinearSet {
 
@@ -41,12 +38,12 @@ public class LinearSet {
     return result;
   }
 
-  public boolean merge(ArrayList<String> innerVector, Liastar constraints, LinearSet another) {
+  public boolean merge(ArrayList<String> innerVector, LiaStar constraints, LinearSet another) {
     assert false;
     return false;
   }
 
-  public void shiftDown(ArrayList<String> innerVector, Liastar constraints) {
+  public void shiftDown(ArrayList<String> innerVector, LiaStar constraints) {
 //    int bSize = b.size();
 //    for(int i = 0; i < bSize; ++ i) {
 //      ArrayList<Long> curVector = b.get(i);
@@ -107,7 +104,7 @@ public class LinearSet {
 //    }
   }
 
-  public void offsetDown(ArrayList<String> innerVector, Liastar constraints) {
+  public void offsetDown(ArrayList<String> innerVector, LiaStar constraints) {
     assert false;
     return;
   }

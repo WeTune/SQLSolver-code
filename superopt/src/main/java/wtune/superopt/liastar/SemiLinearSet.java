@@ -40,12 +40,12 @@ public class SemiLinearSet {
     sls.add(ls);
   }
 
-  public Liastar tranToLiastar(ArrayList<String> outerVector) {
-    Liastar result = null;
+  public LiaStar tranToLiastar(ArrayList<String> outerVector) {
+    LiaStar result = null;
     String sumNamePrefix = "sls" + newSlsId();
     for(int i = 0; i < outerVector.size(); ++ i) {
       String varName = outerVector.get(i);
-      Liastar sum = Liastar.mkConst(false, 0);
+      LiaStar sum = LiaStar.mkConst(false, 0);
       for(int j = 0; j < sls.size(); ++ j) {
         LinearSet ls = sls.get(j);
         ArrayList<Long> a = ls.a;
@@ -53,11 +53,11 @@ public class SemiLinearSet {
         String paramNiu = sumNamePrefix + "_niu_" + j;
         long aValue = a.get(i);
         if (aValue == 1) {
-          sum = Liastar.mkPlus(false, sum, Liastar.mkVar(false, paramNiu));
+          sum = LiaStar.mkPlus(false, sum, LiaStar.mkVar(false, paramNiu));
         } else if (aValue != 0) {
-          sum = Liastar.mkPlus(false, sum,
-              Liastar.mkMult(false,
-                  Liastar.mkVar(false, paramNiu), Liastar.mkConst(false, aValue)));
+          sum = LiaStar.mkPlus(false, sum,
+              LiaStar.mkMult(false,
+                  LiaStar.mkVar(false, paramNiu), LiaStar.mkConst(false, aValue)));
         }
 
 //        for(int k = 0; k < b.size(); ++ k) {
@@ -74,8 +74,8 @@ public class SemiLinearSet {
 //        }
       }
       result = (result == null) ?
-          Liastar.mkEq(false, Liastar.mkVar(false, varName), sum) :
-          Liastar.mkAnd(false, result, Liastar.mkEq(false, Liastar.mkVar(false, varName), sum));
+          LiaStar.mkEq(false, LiaStar.mkVar(false, varName), sum) :
+          LiaStar.mkAnd(false, result, LiaStar.mkEq(false, LiaStar.mkVar(false, varName), sum));
     }
 
     return result;
@@ -149,7 +149,7 @@ public class SemiLinearSet {
         bodyExp, 0, null, null, null, null);
   }
 
-  public LinearSet getGapLS(ArrayList<String> innerVector, Liastar constr, int outerVarNum, int limit) throws Exception {
+  public LinearSet getGapLS(ArrayList<String> innerVector, LiaStar constr, int outerVarNum, int limit) throws Exception {
     try (final Context ctx = new Context()) {
       BoolExpr target = null;
       HashMap<String, IntExpr> varDef = new HashMap<>();
@@ -189,7 +189,7 @@ public class SemiLinearSet {
     }
   }
 
-  public boolean augment(ArrayList<String> innerVector, Liastar constaints, int outerVarNum) throws Exception {
+  public boolean augment(ArrayList<String> innerVector, LiaStar constaints, int outerVarNum) throws Exception {
     for(int limit = 1; limit < 10; ++ limit) {
       LinearSet ls = getGapLS(innerVector, constaints, outerVarNum, limit);
       if (ls != null) {
@@ -207,7 +207,7 @@ public class SemiLinearSet {
     }
   }
 
-  void merge(ArrayList<String> innerVector, Liastar constraints) {
+  void merge(ArrayList<String> innerVector, LiaStar constraints) {
     int lastIndex = sls.size()-1;
     LinearSet ls = sls.get(lastIndex);
     for(int i = 0; i < lastIndex; ++ i) {
@@ -219,17 +219,17 @@ public class SemiLinearSet {
     }
   }
 
-  void shiftDown(ArrayList<String> innerVector, Liastar constraints) {
+  void shiftDown(ArrayList<String> innerVector, LiaStar constraints) {
     for(int i = 0; i < sls.size(); ++ i)
       sls.get(i).shiftDown(innerVector, constraints);
   }
 
-  void offsetDown(ArrayList<String> innerVector, Liastar constraints) {
+  void offsetDown(ArrayList<String> innerVector, LiaStar constraints) {
     for(int i = 0; i < sls.size(); ++ i)
       sls.get(i).offsetDown(innerVector, constraints);
   }
 
-  public void saturate(ArrayList<String> innerVector, Liastar constraints) {
+  public void saturate(ArrayList<String> innerVector, LiaStar constraints) {
 //    merge(constraints);
 //    shiftDown(constraints);
 //    offsetDown(constraints);

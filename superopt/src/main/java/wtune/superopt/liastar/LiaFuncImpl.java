@@ -4,19 +4,20 @@ import com.microsoft.z3.*;
 import wtune.superopt.util.PrettyBuilder;
 
 import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
-public class LiaFuncImpl extends Liastar{
+public class LiaFuncImpl extends LiaStar {
 
   String funcName;
-  List<Liastar> vars;
+  List<LiaStar> vars;
 
-  LiaFuncImpl(String funcName, Liastar var) {
+  LiaFuncImpl(String funcName, LiaStar var) {
     this.funcName = funcName;
     this.vars = List.of(var);
   }
 
-  LiaFuncImpl(String funcName, List<Liastar> vars) {
+  LiaFuncImpl(String funcName, List<LiaStar> vars) {
     this.funcName = funcName;
     this.vars = new ArrayList<>(vars);
   }
@@ -27,18 +28,18 @@ public class LiaFuncImpl extends Liastar{
   }
 
   @Override
-  public Liastar deepcopy() {
-    List<Liastar> newVars = new ArrayList<>(vars);
-    return Liastar.mkFunc(innerStar, funcName, newVars);
+  public LiaStar deepcopy() {
+    List<LiaStar> newVars = new ArrayList<>(vars);
+    return LiaStar.mkFunc(innerStar, funcName, newVars);
   }
 
   @Override
-  public Liastar multToBin(int n) {
+  public LiaStar multToBin(int n) {
     return this;
   }
 
   @Override
-  public Liastar simplifyMult(HashMap<Liastar, String> multToVar) {
+  public LiaStar simplifyMult(HashMap<LiaStar, String> multToVar) {
     return null;
   }
 
@@ -48,41 +49,53 @@ public class LiaFuncImpl extends Liastar{
   }
 
   @Override
-  public Liastar mergeMult(HashMap<LiamultImpl, String> multToVar) {
+  public LiaStar mergeMult(HashMap<LiaMulImpl, String> multToVar) {
     return this;
   }
 
   @Override
   public Set<String> collectVarSet() {
     HashSet<String> result = new HashSet<>();
-    for (Liastar var : vars)
+    for (LiaStar var : vars)
       result.addAll(var.collectVarSet());
     return result;
   }
 
   @Override
-  public Liastar expandStar() throws Exception {
+  public Set<String> collectAllVars() {
+    HashSet<String> result = new HashSet<>();
+    for (LiaStar var : vars)
+      result.addAll(var.collectAllVars());
+    return result;
+  }
+
+  @Override
+  public LiaStar expandStar() {
     return this;
   }
 
-  private Expr transFuncToSMT(Context ctx, HashMap<String, IntExpr> varsName) {
-    // sorts
-    final Sort I = ctx.getIntSort();
-    Sort[] argSorts = new Sort[vars.size()];
-    Arrays.fill(argSorts, I);
+  private Expr transFuncToSMT(Context ctx, Map<String, IntExpr> varsName, Map<String, FuncDecl> funcsName) {
     // args
-    Expr[] args = vars.stream().map(x -> x.transToSMT(ctx, varsName))
+    Expr[] args = vars.stream().map(x -> x.transToSMT(ctx, varsName, funcsName))
             .toList().toArray(new Expr[0]);
     // func app
-    final FuncDecl func = ctx.mkFuncDecl(funcName, argSorts, I);
+    FuncDecl func = funcsName.get(funcName);
+    if (func == null) {
+      // create function definition upon first use
+      final Sort I = ctx.getIntSort();
+      Sort[] argSorts = new Sort[vars.size()];
+      Arrays.fill(argSorts, I);
+      func = ctx.mkFuncDecl(funcName, argSorts, I);
+      funcsName.put(funcName, func);
+    }
     return ctx.mkApp(func, args);
   }
 
   @Override
-  public Expr transToSMT(Context ctx, HashMap<String, IntExpr> varsName) {
+  public Expr transToSMT(Context ctx, Map<String, IntExpr> varsName, Map<String, FuncDecl> funcsName) {
     switch (funcName) {
       case "sqrt": {
-        final IntExpr varExpr = (IntExpr) vars.get(0).transToSMT(ctx, varsName);
+        final IntExpr varExpr = (IntExpr) vars.get(0).transToSMT(ctx, varsName, funcsName);
         RealExpr realExpr = ctx.mkInt2Real(varExpr);
         FPExpr fpExpr = ctx.mkFPToFP(ctx.mkFPRoundNearestTiesToEven(), realExpr, ctx.mkFPSortDouble());
         Expr result = ctx.mkFPSqrt(ctx.mkFPRoundNearestTiesToEven(), fpExpr);
@@ -90,12 +103,12 @@ public class LiaFuncImpl extends Liastar{
         return ctx.mkReal2Int((RealExpr) result);
       }
       case "minus": {
-        final IntExpr varExpr0 = (IntExpr) vars.get(0).transToSMT(ctx, varsName);
-        final IntExpr varExpr1 = (IntExpr) vars.get(1).transToSMT(ctx, varsName);
+        final IntExpr varExpr0 = (IntExpr) vars.get(0).transToSMT(ctx, varsName, funcsName);
+        final IntExpr varExpr1 = (IntExpr) vars.get(1).transToSMT(ctx, varsName, funcsName);
         return ctx.mkSub(varExpr0, varExpr1);
       }
       default: {
-        return transFuncToSMT(ctx, varsName);
+        return transFuncToSMT(ctx, varsName, funcsName);
       }
     }
   }
@@ -115,7 +128,7 @@ public class LiaFuncImpl extends Liastar{
   @Override
   public Set<String> getVars() {
     HashSet<String> result = new HashSet<>();
-    for (Liastar var : vars)
+    for (LiaStar var : vars)
       result.addAll(var.getVars());
     return result;
   }
@@ -125,7 +138,7 @@ public class LiaFuncImpl extends Liastar{
     int indent = funcName.length() + 1;
     builder.print(funcName).print("(").indent(indent);
     for (int i = 0, bound = vars.size(); i < bound; i++) {
-      Liastar var = vars.get(i);
+      LiaStar var = vars.get(i);
       boolean multiLine = var.isPrettyPrintMultiLine();
       if (i > 0 && multiLine) builder.println();
       var.prettyPrint(builder);
@@ -137,7 +150,7 @@ public class LiaFuncImpl extends Liastar{
 
   @Override
   protected boolean isPrettyPrintMultiLine() {
-    for (Liastar var : vars) {
+    for (LiaStar var : vars) {
       if (var.isPrettyPrintMultiLine()) return true;
     }
     return false;
@@ -166,9 +179,15 @@ public class LiaFuncImpl extends Liastar{
   }
 
   @Override
-  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
-    List<Liastar> newVars = new ArrayList<>(vars.stream().map(v -> v.transformPostOrder(transformer)).toList());
+  public LiaStar transformPostOrder(Function<LiaStar, LiaStar> transformer) {
+    List<LiaStar> newVars = new ArrayList<>(vars.stream().map(v -> v.transformPostOrder(transformer)).toList());
     return transformer.apply(mkFunc(innerStar, funcName, newVars));
+  }
+
+  @Override
+  public LiaStar transformPostOrder(BiFunction<LiaStar, LiaStar, LiaStar> transformer, LiaStar parent) {
+    List<LiaStar> newVars = new ArrayList<>(vars.stream().map(v -> v.transformPostOrder(transformer, this)).toList());
+    return transformer.apply(mkFunc(innerStar, funcName, newVars), parent);
   }
 
 }

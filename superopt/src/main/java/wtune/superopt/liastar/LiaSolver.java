@@ -5,17 +5,17 @@ import wtune.superopt.logic.LogicSupport;
 import wtune.superopt.logic.SqlSolver;
 
 import java.util.*;
-import static wtune.superopt.liastar.Liastar.*;
+import static wtune.superopt.liastar.LiaStar.*;
 
-public class Liasolver {
+public class LiaSolver {
 
-  Liastar liaFormula;
+  LiaStar liaFormula;
 
-  public Liasolver(Liastar f) {
+  public LiaSolver(LiaStar f) {
     liaFormula = f;
   }
 
-  Liasolver(Liastar f, long m) {
+  LiaSolver(LiaStar f, long m) {
     liaFormula = f;
   }
 
@@ -48,7 +48,7 @@ public class Liasolver {
 
   String checkUnderapp() {
     try {
-      Liastar curexp = liaFormula.deepcopy();
+      LiaStar curexp = liaFormula.deepcopy();
       curexp = calculateUnderApprox(curexp, curexp.embeddingLayers() > 4 ? 1 : 2);
       return solveLia(curexp);
     } catch (Exception e) {
@@ -57,7 +57,7 @@ public class Liasolver {
   }
 
   String checkOverOverapp() throws Exception {
-    Liastar tmpFormula = liaFormula.deepcopy();
+    LiaStar tmpFormula = liaFormula.deepcopy();
     tmpFormula = tmpFormula.subformulaWithoutStar();
     String result = solveLia(tmpFormula);
     return result;
@@ -67,7 +67,7 @@ public class Liasolver {
     if (LogicSupport.dumpLiaFormulas)
       System.out.println("init: " + liaFormula);
 
-    Liastar tmpFormula = liaFormula.deepcopy();
+    LiaStar tmpFormula = liaFormula.deepcopy();
     tmpFormula = tmpFormula.pushUpParameter(new HashSet<>());
     tmpFormula = tmpFormula.removeParameter();
     if (LogicSupport.dumpLiaFormulas)
@@ -150,7 +150,7 @@ public class Liasolver {
     return target;
   }
 
-  String solveLia(Liastar f) {
+  String solveLia(LiaStar f) {
     try (final Context ctx = new Context()) {
       BoolExpr target = ctx.mkTrue();
 
@@ -193,10 +193,10 @@ public class Liasolver {
     }
   }
 
-  String solveNestedLiastar(Liastar f) throws Exception {
+  String solveNestedLiastar(LiaStar f) throws Exception {
     if (LogicSupport.dumpLiaFormulas)
       System.out.println("liastar: " + f.toString());
-    f.expandStar();
+    f = f.expandStar();
     f = f.simplifyIte();
 
     if (LogicSupport.dumpLiaFormulas) {
@@ -209,7 +209,7 @@ public class Liasolver {
 
 
   String checkOverappWithK() {
-    Liastar tmpFormula = liaFormula.deepcopy();
+    LiaStar tmpFormula = liaFormula.deepcopy();
     tmpFormula.simplifyMult(new HashMap<>());
     tmpFormula.mergeMult(new HashMap<>());
 
@@ -222,7 +222,7 @@ public class Liasolver {
     while(true);
   }
 
-  Status solveWithK(Liastar e) {
+  Status solveWithK(LiaStar e) {
     Set<String> vars = e.collectVarSet();
     Context ctx = new Context();
     Solver sol = ctx.mkSolver();

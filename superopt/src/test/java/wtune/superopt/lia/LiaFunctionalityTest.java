@@ -5,27 +5,15 @@ import com.microsoft.z3.Expr;
 import com.microsoft.z3.Solver;
 import com.microsoft.z3.Status;
 import org.junit.jupiter.api.Test;
-import wtune.superopt.liastar.Liastar;
-import wtune.superopt.logic.SqlSolver;
-import wtune.superopt.logic.SqlSolverSupport;
-import wtune.superopt.substitution.Substitution;
-import wtune.superopt.substitution.SubstitutionBank;
-import wtune.superopt.substitution.SubstitutionSupport;
-import wtune.superopt.uexpr.*;
+import wtune.superopt.liastar.LiaStar;
 
-import java.io.IOException;
-import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import static wtune.superopt.TestHelper.dataDir;
-import static wtune.superopt.uexpr.UPred.PredKind.EQ;
-
 class LiaFunctionalityTest {
 
-  Status solveWithK(Liastar e) {
+  Status solveWithK(LiaStar e) {
     Set<String> vars = e.collectVarSet();
     Context ctx = new Context();
     Solver sol = ctx.mkSolver();
@@ -50,19 +38,19 @@ class LiaFunctionalityTest {
   @Test
   void testExpandWithK() {
     // u1 != u2 /\ (u1, u2) in { (x1, x2) | x1 = x2 }*
-    Liastar e1 = Liastar.mkAnd(false,
-            Liastar.mkNot(false,
-                    Liastar.mkEq(false,
-                            Liastar.mkVar(false, "u1"),
-                            Liastar.mkVar(false, "u2")
+    LiaStar e1 = LiaStar.mkAnd(false,
+            LiaStar.mkNot(false,
+                    LiaStar.mkEq(false,
+                            LiaStar.mkVar(false, "u1"),
+                            LiaStar.mkVar(false, "u2")
                     )
             ),
-            Liastar.mkSum(false,
+            LiaStar.mkSum(false,
                     new ArrayList(List.of("u1", "u2")),
                     new ArrayList(List.of("x1", "x2")),
-                    Liastar.mkEq(true,
-                            Liastar.mkVar(true, "x1"),
-                            Liastar.mkVar(true, "x2")
+                    LiaStar.mkEq(true,
+                            LiaStar.mkVar(true, "x1"),
+                            LiaStar.mkVar(true, "x2")
                     )
             )
     );
@@ -71,22 +59,22 @@ class LiaFunctionalityTest {
     // u1 != u2 /\ (u1, u2) in { (x1, x2) |
     //                      (x1, x2) in { (y1, y2) | y1 = y2 }*
     //                                       }*
-    Liastar e2 = Liastar.mkAnd(false,
-            Liastar.mkNot(false,
-                    Liastar.mkEq(false,
-                            Liastar.mkVar(false, "u1"),
-                            Liastar.mkVar(false, "u2")
+    LiaStar e2 = LiaStar.mkAnd(false,
+            LiaStar.mkNot(false,
+                    LiaStar.mkEq(false,
+                            LiaStar.mkVar(false, "u1"),
+                            LiaStar.mkVar(false, "u2")
                     )
             ),
-            Liastar.mkSum(false,
+            LiaStar.mkSum(false,
                     new ArrayList(List.of("u1", "u2")),
                     new ArrayList(List.of("x1", "x2")),
-                    Liastar.mkSum(true,
+                    LiaStar.mkSum(true,
                             new ArrayList(List.of("x1", "x2")),
                             new ArrayList(List.of("y1", "y2")),
-                            Liastar.mkEq(true,
-                                    Liastar.mkVar(true, "y1"),
-                                    Liastar.mkVar(true, "y2")
+                            LiaStar.mkEq(true,
+                                    LiaStar.mkVar(true, "y1"),
+                                    LiaStar.mkVar(true, "y2")
                             )
                     )
             )
@@ -97,60 +85,60 @@ class LiaFunctionalityTest {
     // /\ (v1, v2, v3, v4, v5) in { (x1, x2, x3, x4, x5) |
     //                              (x4 = 0 \/ x4 = 1) /\ (x5 = 0 \/ x5 = 1)
     //                              /\ x1 = ite(x4 = 1, x5, 0) /\ x2 = ite(x4 = 1, x5, 0) /\ x3 = ite(x4 = 1, x5, 0) }*
-    Liastar e3 = Liastar.mkAnd(false,
-            Liastar.mkNot(false, Liastar.mkEq(false,
-                    Liastar.mkIte(false,
-                            Liastar.mkLt(false, Liastar.mkConst(false, 0), Liastar.mkVar(false, "v1")),
-                            Liastar.mkConst(false, 1), Liastar.mkConst(false, 0)
+    LiaStar e3 = LiaStar.mkAnd(false,
+            LiaStar.mkNot(false, LiaStar.mkEq(false,
+                    LiaStar.mkIte(false,
+                            LiaStar.mkLt(false, LiaStar.mkConst(false, 0), LiaStar.mkVar(false, "v1")),
+                            LiaStar.mkConst(false, 1), LiaStar.mkConst(false, 0)
                     ),
-                    Liastar.mkIte(false,
-                            Liastar.mkLt(false,
-                                    Liastar.mkConst(false, 0),
-                                    Liastar.mkPlus(false,
-                                            Liastar.mkVar(false, "v2"),
-                                            Liastar.mkVar(false, "v3")
+                    LiaStar.mkIte(false,
+                            LiaStar.mkLt(false,
+                                    LiaStar.mkConst(false, 0),
+                                    LiaStar.mkPlus(false,
+                                            LiaStar.mkVar(false, "v2"),
+                                            LiaStar.mkVar(false, "v3")
                                     )
                             ),
-                            Liastar.mkConst(false, 1), Liastar.mkConst(false, 0)
+                            LiaStar.mkConst(false, 1), LiaStar.mkConst(false, 0)
                     )
             )),
-            Liastar.mkSum(false,
+            LiaStar.mkSum(false,
                     new ArrayList(List.of("v1", "v2", "v3", "v4", "v5")),
                     new ArrayList(List.of("x1", "x2", "x3", "x4", "x5")),
-                    Liastar.mkAnd(true,
-                            Liastar.mkOr(true,
-                                    Liastar.mkEq(true, Liastar.mkVar(true, "x4"), Liastar.mkConst(true, 0)),
-                                    Liastar.mkEq(true, Liastar.mkVar(true, "x4"), Liastar.mkConst(true, 1))
+                    LiaStar.mkAnd(true,
+                            LiaStar.mkOr(true,
+                                    LiaStar.mkEq(true, LiaStar.mkVar(true, "x4"), LiaStar.mkConst(true, 0)),
+                                    LiaStar.mkEq(true, LiaStar.mkVar(true, "x4"), LiaStar.mkConst(true, 1))
                             ),
-                            Liastar.mkAnd(true,
-                                    Liastar.mkOr(true,
-                                            Liastar.mkEq(true, Liastar.mkVar(true, "x5"), Liastar.mkConst(true, 0)),
-                                            Liastar.mkEq(true, Liastar.mkVar(true, "x5"), Liastar.mkConst(true, 1))
+                            LiaStar.mkAnd(true,
+                                    LiaStar.mkOr(true,
+                                            LiaStar.mkEq(true, LiaStar.mkVar(true, "x5"), LiaStar.mkConst(true, 0)),
+                                            LiaStar.mkEq(true, LiaStar.mkVar(true, "x5"), LiaStar.mkConst(true, 1))
                                     ),
-                                    Liastar.mkAnd(true,
-                                            Liastar.mkEq(true,
-                                                    Liastar.mkVar(true, "x1"),
-                                                    Liastar.mkIte(true,
-                                                            Liastar.mkEq(true, Liastar.mkVar(true, "x4"), Liastar.mkConst(true, 1)),
-                                                            Liastar.mkVar(true, "x5"),
-                                                            Liastar.mkConst(true, 0)
+                                    LiaStar.mkAnd(true,
+                                            LiaStar.mkEq(true,
+                                                    LiaStar.mkVar(true, "x1"),
+                                                    LiaStar.mkIte(true,
+                                                            LiaStar.mkEq(true, LiaStar.mkVar(true, "x4"), LiaStar.mkConst(true, 1)),
+                                                            LiaStar.mkVar(true, "x5"),
+                                                            LiaStar.mkConst(true, 0)
                                                     )
                                             ),
-                                            Liastar.mkAnd(true,
-                                                    Liastar.mkEq(true,
-                                                            Liastar.mkVar(true, "x2"),
-                                                            Liastar.mkIte(true,
-                                                                    Liastar.mkEq(true, Liastar.mkVar(true, "x4"), Liastar.mkConst(true, 1)),
-                                                                    Liastar.mkVar(true, "x5"),
-                                                                    Liastar.mkConst(true, 0)
+                                            LiaStar.mkAnd(true,
+                                                    LiaStar.mkEq(true,
+                                                            LiaStar.mkVar(true, "x2"),
+                                                            LiaStar.mkIte(true,
+                                                                    LiaStar.mkEq(true, LiaStar.mkVar(true, "x4"), LiaStar.mkConst(true, 1)),
+                                                                    LiaStar.mkVar(true, "x5"),
+                                                                    LiaStar.mkConst(true, 0)
                                                             )
                                                     ),
-                                                    Liastar.mkEq(true,
-                                                            Liastar.mkVar(true, "x3"),
-                                                            Liastar.mkIte(true,
-                                                                    Liastar.mkEq(true, Liastar.mkVar(true, "x4"), Liastar.mkConst(true, 1)),
-                                                                    Liastar.mkVar(true, "x5"),
-                                                                    Liastar.mkConst(true, 0)
+                                                    LiaStar.mkEq(true,
+                                                            LiaStar.mkVar(true, "x3"),
+                                                            LiaStar.mkIte(true,
+                                                                    LiaStar.mkEq(true, LiaStar.mkVar(true, "x4"), LiaStar.mkConst(true, 1)),
+                                                                    LiaStar.mkVar(true, "x5"),
+                                                                    LiaStar.mkConst(true, 0)
                                                             )
                                                     )
                                             )

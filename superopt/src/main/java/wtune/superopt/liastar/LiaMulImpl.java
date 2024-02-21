@@ -3,31 +3,29 @@ package wtune.superopt.liastar;
 import com.microsoft.z3.*;
 import wtune.superopt.util.PrettyBuilder;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
-public class LiamultImpl extends Liastar {
+public class LiaMulImpl extends LiaStar {
 
-  Liastar operand1;
-  Liastar operand2;
+  LiaStar operand1;
+  LiaStar operand2;
 
-  LiamultImpl(Liastar op1, Liastar op2) {
+  LiaMulImpl(LiaStar op1, LiaStar op2) {
     operand1 = op1;
     operand2 = op2;
   }
 
   @Override
-  public Liastar expandStar() throws Exception {
+  public LiaStar expandStar() {
     return this;
   }
 
   @Override
   protected void prettyPrint(PrettyBuilder builder) {
-    boolean needsParen1 = (operand1 instanceof LiaplusImpl);
-    boolean needsParen2 = (operand1 instanceof LiaplusImpl);
+    boolean needsParen1 = (operand1 instanceof LiaPlusImpl);
+    boolean needsParen2 = (operand1 instanceof LiaPlusImpl);
     prettyPrintBinaryOp(builder, operand1, operand2,
             needsParen1, needsParen2, " x ");
   }
@@ -56,7 +54,7 @@ public class LiamultImpl extends Liastar {
   }
 
   @Override
-  public Liastar deepcopy() {
+  public LiaStar deepcopy() {
     return mkMult(innerStar, operand1.deepcopy(), operand2.deepcopy());
   }
 
@@ -64,21 +62,21 @@ public class LiamultImpl extends Liastar {
   public boolean equals(Object obj) {
     if(obj == null)
       return false;
-    if(!(obj instanceof LiamultImpl))
+    if(!(obj instanceof LiaMulImpl))
       return false;
     if(obj == this)
       return true;
-    LiamultImpl that = (LiamultImpl) obj;
-    HashSet<Liastar> thisItems = new HashSet<>();
-    HashSet<Liastar> thatItems = new HashSet<>();
+    LiaMulImpl that = (LiaMulImpl) obj;
+    HashSet<LiaStar> thisItems = new HashSet<>();
+    HashSet<LiaStar> thatItems = new HashSet<>();
     decomposeMults(this, thisItems);
     decomposeMults(that, thatItems);
-    for(Liastar formula : thisItems) {
+    for(LiaStar formula : thisItems) {
       if(!thatItems.contains(formula)) {
         return false;
       }
     }
-    for(Liastar formula : thatItems) {
+    for(LiaStar formula : thatItems) {
       if(!thisItems.contains(formula)) {
         return false;
       }
@@ -88,20 +86,20 @@ public class LiamultImpl extends Liastar {
 
   @Override
   public int hashCode() {
-    HashSet<Liastar> thisItems = new HashSet<>();
+    HashSet<LiaStar> thisItems = new HashSet<>();
     decomposeMults(this, thisItems);
     int result = 0;
-    for(Liastar formula : thisItems) {
+    for(LiaStar formula : thisItems) {
       result = result + formula.hashCode();
     }
     return result;
   }
 
   @Override
-  public Liastar mergeMult(HashMap<LiamultImpl, String> multToVar) {
+  public LiaStar mergeMult(HashMap<LiaMulImpl, String> multToVar) {
     if(innerStar == false)
       return this;
-    for(LiamultImpl cur : multToVar.keySet()) {
+    for(LiaMulImpl cur : multToVar.keySet()) {
       if(this.equals(cur))
         return mkVar(true, multToVar.get(cur));
     }
@@ -112,7 +110,7 @@ public class LiamultImpl extends Liastar {
 
 
   @Override
-  public Liastar multToBin(int n) {
+  public LiaStar multToBin(int n) {
     return this;
 //    if(innerStar == false)
 //      return this;
@@ -123,29 +121,29 @@ public class LiamultImpl extends Liastar {
 //    return transMult(n, array, 0);
   }
 
-  boolean isSimp(Liastar l) {
+  boolean isSimp(LiaStar l) {
     LiaOpType type = l.getType();
     return type.equals(LiaOpType.LMULT) ||
            type.equals(LiaOpType.LVAR)  ||
            type.equals(LiaOpType.LCONST);
   }
 
-  Liastar transMult(int nbits, ArrayList<String> varSet, int start) {
+  LiaStar transMult(int nbits, ArrayList<String> varSet, int start) {
     assert start < varSet.size();
 
     if(start == (varSet.size() - 1))
       return mkVar(true, varSet.get(start));
 
-    Liastar exp = transMult(nbits, varSet, start + 1);
+    LiaStar exp = transMult(nbits, varSet, start + 1);
     String baseName = varSet.get(start);
-    Liastar result = null;
+    LiaStar result = null;
     for(int i = 0; i < nbits; i = i + 1) {
       String bitName = baseName + "_" + i;
       if(result == null) {
         result = mkIte(true, mkEq(true, mkVar(true, bitName), mkConst(true, 0)),
             mkConst(true, 0), exp );
       } else {
-        Liastar tmp = exp;
+        LiaStar tmp = exp;
         for(int j = 1; j < (1 << i); j = j + 1) {
           tmp = mkPlus(true, exp, tmp);
         }
@@ -167,10 +165,17 @@ public class LiamultImpl extends Liastar {
   }
 
   @Override
-  public Liastar simplifyMult(HashMap<Liastar, String> multToVar) {
+  public Set<String> collectAllVars() {
+    Set<String> varSet = operand1.collectAllVars();
+    varSet.addAll(operand2.collectAllVars());
+    return varSet;
+  }
+
+  @Override
+  public LiaStar simplifyMult(HashMap<LiaStar, String> multToVar) {
     operand1.innerStar = innerStar;
     operand2.innerStar = innerStar;
-    Liastar[] starArray = new Liastar[4];
+    LiaStar[] starArray = new LiaStar[4];
     starArray[0] = operand1.simplifyMult(multToVar);
     starArray[1] = operand2.simplifyMult(multToVar);
     starArray[2] = null;
@@ -207,9 +212,9 @@ public class LiamultImpl extends Liastar {
 
 
   @Override
-  public Expr transToSMT(Context ctx, HashMap<String, IntExpr> varsName) {
-    ArithExpr one = (ArithExpr) operand1.transToSMT(ctx, varsName);
-    ArithExpr two = (ArithExpr) operand2.transToSMT(ctx, varsName);
+  public Expr transToSMT(Context ctx, Map<String, IntExpr> varsName, Map<String, FuncDecl> funcsName) {
+    ArithExpr one = (ArithExpr) operand1.transToSMT(ctx, varsName, funcsName);
+    ArithExpr two = (ArithExpr) operand2.transToSMT(ctx, varsName, funcsName);
     return ctx.mkMul(one, two);
   }
 
@@ -227,11 +232,11 @@ public class LiamultImpl extends Liastar {
   }
 
   @Override
-  public Liastar simplifyIte() {
+  public LiaStar simplifyIte() {
     operand1 = operand1.simplifyIte();
     operand2 = operand2.simplifyIte();
-    Liastar tmpZero = mkConst(innerStar, 0);
-    Liastar tmpOne = mkConst(innerStar, 1);
+    LiaStar tmpZero = mkConst(innerStar, 0);
+    LiaStar tmpOne = mkConst(innerStar, 1);
     if(operand1.equals(tmpZero) || operand2.equals(tmpZero)) {
       return tmpZero.deepcopy();
     }
@@ -250,10 +255,17 @@ public class LiamultImpl extends Liastar {
   }
 
   @Override
-  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
-    Liastar operand10 = operand1.transformPostOrder(transformer);
-    Liastar operand20 = operand2.transformPostOrder(transformer);
+  public LiaStar transformPostOrder(Function<LiaStar, LiaStar> transformer) {
+    LiaStar operand10 = operand1.transformPostOrder(transformer);
+    LiaStar operand20 = operand2.transformPostOrder(transformer);
     return transformer.apply(mkMult(innerStar, operand10, operand20));
+  }
+
+  @Override
+  public LiaStar transformPostOrder(BiFunction<LiaStar, LiaStar, LiaStar> transformer, LiaStar parent) {
+    LiaStar operand10 = operand1.transformPostOrder(transformer, this);
+    LiaStar operand20 = operand2.transformPostOrder(transformer, this);
+    return transformer.apply(mkMult(innerStar, operand10, operand20), parent);
   }
 
 }

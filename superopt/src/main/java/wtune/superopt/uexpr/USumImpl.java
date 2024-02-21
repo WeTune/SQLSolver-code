@@ -1,7 +1,7 @@
 package wtune.superopt.uexpr;
 
 import wtune.common.utils.ListSupport;
-import wtune.superopt.liastar.Liastar;
+import wtune.superopt.liastar.LiaStar;
 import wtune.superopt.util.AbstractPrettyPrinter;
 import wtune.superopt.util.SetMatching;
 
@@ -212,7 +212,7 @@ public record USumImpl(Set<UVar> boundedVars, UTerm body) implements USum {
     if (cur == boundedVars.size()) return body.equals(thatBody);
 
     final UVar curVar = boundedVars.get(cur);
-    final UVar newVar = UVar.mkBase(UName.mk(Liastar.newVarName()));
+    final UVar newVar = UVar.mkBase(UName.mk(LiaStar.newVarName()));
     body = body.replaceVar(curVar, newVar, true);
 
     for (UVar v: thatBoundVars) {
@@ -262,7 +262,7 @@ public record USumImpl(Set<UVar> boundedVars, UTerm body) implements USum {
                                         int depthInPair, List<UVar> s1, Set<UVar> s2) {
     if (depthInPair == s1.size()) return tryMatch(depth + 1, matching, t1, t2);
     final UVar curVar = s1.get(depthInPair);
-    final UVar newVar = UVar.mkBase(UName.mk(Liastar.newVarName()));
+    final UVar newVar = UVar.mkBase(UName.mk(LiaStar.newVarName()));
     t1 = t1.replaceVar(curVar, newVar, true);
     for (UVar v2 : s2) {
       Set<UVar> tmps2 = new HashSet<>(s2);

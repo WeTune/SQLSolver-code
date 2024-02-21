@@ -1,16 +1,12 @@
 package wtune.superopt.logic;
 
-import com.microsoft.z3.Global;
 import org.apache.commons.lang3.tuple.Pair;
 import wtune.superopt.liastar.*;
-import wtune.superopt.substitution.SubstitutionImpl;
 import wtune.superopt.uexpr.*;
 
 import java.util.*;
 
 import static wtune.common.utils.IterableSupport.any;
-import static wtune.common.utils.ListSupport.filter;
-import static wtune.superopt.logic.CASTSupport.schema;
 import static wtune.superopt.logic.SqlSolverSupport.hasFreeTuple;
 import static wtune.superopt.logic.SqlSolverSupport.overlap;
 import static wtune.superopt.uexpr.UExprSupport.isPredOfVarArg;
@@ -82,12 +78,12 @@ public class SqlSolver {
 //      }
 //    }
     SqlSolverSupport translator = new SqlSolverSupport(query1, query2, outVar1);
-    Liastar fstar = translator.uexpToLiastar();
+    LiaStar fstar = translator.uexpToLiastar();
     if (LogicSupport.dumpLiaFormulas) {
       System.out.println("==> Lia formula: ");
       System.out.println(fstar);
     }
-    Liasolver solver = new Liasolver(fstar);
+    LiaSolver solver = new LiaSolver(fstar);
     // long start = System.currentTimeMillis();
     LiaSolverStatus result = solver.solve();
     // System.out.println(System.currentTimeMillis() - start);
@@ -99,7 +95,7 @@ public class SqlSolver {
   }
 
   public static void initialize() {
-    Liastar.resetId();
+    LiaStar.resetId();
     SemiLinearSet.resetSlsId();
   }
 

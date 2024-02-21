@@ -3,20 +3,19 @@ package wtune.superopt.liastar;
 import com.microsoft.z3.*;
 import wtune.superopt.util.PrettyBuilder;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 
-public class LiaconstImpl extends Liastar {
+public class LiaStringImpl extends LiaStar {
 
-  long value;
+  String value;
 
-  LiaconstImpl() {
-    value = 0;
+  LiaStringImpl() {
+    value = "";
   }
 
-  LiaconstImpl(long v) {
+  LiaStringImpl(String v) {
     value = v;
   }
 
@@ -27,10 +26,10 @@ public class LiaconstImpl extends Liastar {
 
   @Override
   public LiaOpType getType() {
-    return LiaOpType.LCONST;
+    return LiaOpType.LSTRING;
   }
 
-  public long getValue() {
+  public String getValue() {
     return value;
   }
 
@@ -40,7 +39,12 @@ public class LiaconstImpl extends Liastar {
   }
 
   @Override
-  public Liastar mergeMult(HashMap<LiamultImpl, String> multToVar) {
+  public Set<String> collectAllVars() {
+    return new HashSet<>();
+  }
+
+  @Override
+  public LiaStar mergeMult(HashMap<LiaMulImpl, String> multToVar) {
     return this;
   }
 
@@ -50,17 +54,17 @@ public class LiaconstImpl extends Liastar {
   }
 
   @Override
-  public Liastar deepcopy() {
-    return mkConst(innerStar, value);
+  public LiaStar deepcopy() {
+    return mkString(innerStar, value);
   }
 
   @Override
-  public Liastar multToBin(int n) {
+  public LiaStar multToBin(int n) {
     return this;
   }
 
   @Override
-  public Liastar simplifyMult(HashMap<Liastar, String> multToVar) {
+  public LiaStar simplifyMult(HashMap<LiaStar, String> multToVar) {
     return null;
   }
 
@@ -70,15 +74,14 @@ public class LiaconstImpl extends Liastar {
       return true;
     if(that == null)
       return false;
-    if(!(that instanceof LiaconstImpl))
+    if(!(that instanceof LiaStringImpl tmp))
       return false;
-    LiaconstImpl tmp = (LiaconstImpl) that;
-    return value == tmp.value;
+    return Objects.equals(value, tmp.value);
   }
 
   @Override
   public int hashCode() {
-    return Math.toIntExact(value % 10000);
+    return Math.toIntExact(value.hashCode());
   }
 
   @Override
@@ -92,30 +95,24 @@ public class LiaconstImpl extends Liastar {
   }
 
   @Override
-  public Liastar expandStar() throws Exception {
+  public LiaStar expandStar() {
     return this;
   }
 
   @Override
-  public Expr transToSMT(Context ctx, HashMap<String, IntExpr> varsName) {
-    return ctx.mkInt(value);
+  public Expr transToSMT(Context ctx, Map<String, IntExpr> varsName, Map<String, FuncDecl> funcsName) {
+    return ctx.mkString(value);
   }
 
   @Override
   public EstimateResult estimate() {
-    return new EstimateResult(
-            new HashSet(),
-            0,
-            0,
-            value
-    );
+    return null;
   }
 
   @Override
   public Expr expandStarWithK(Context ctx, Solver sol, String suffix) {
-    return ctx.mkInt(value);
+    return null;
   }
-
 
   @Override
   public int embeddingLayers() {
@@ -123,8 +120,12 @@ public class LiaconstImpl extends Liastar {
   }
 
   @Override
-  public Liastar transformPostOrder(Function<Liastar, Liastar> transformer) {
-    return transformer.apply(mkConst(innerStar, value));
+  public LiaStar transformPostOrder(Function<LiaStar, LiaStar> transformer) {
+    return transformer.apply(mkString(innerStar, value));
   }
 
+  @Override
+  public LiaStar transformPostOrder(BiFunction<LiaStar, LiaStar, LiaStar> transformer, LiaStar parent) {
+    return transformer.apply(mkString(innerStar, value), parent);
+  }
 }

@@ -137,4 +137,14 @@ public abstract class ListSupport {
   public static TIntList emptyIntList() {
     return EMPTY_INT_LIST;
   }
+
+  public static <T> void union(List<T> xs, T x) {
+    if (!xs.contains(x)) xs.add(x);
+  }
+
+  public static <T> void union(List<T> xs, List<T> ys) {
+    for (T y : ys) {
+      union(xs, y);
+    }
+  }
 }

@@ -12,10 +12,11 @@ import java.util.stream.Collectors;
 import static wtune.common.utils.IterableSupport.all;
 import static wtune.common.utils.IterableSupport.any;
 import static wtune.common.utils.SetSupport.filter;
-import static wtune.superopt.liastar.Liastar.*;
+import static wtune.superopt.liastar.LiaStar.*;
 import static wtune.superopt.uexpr.UExprSupport.*;
 import static wtune.superopt.uexpr.UKind.*;
 import static wtune.superopt.uexpr.UName.NAME_IS_NULL;
+import static wtune.superopt.uexpr.PredefinedFunctions.*;
 
 public class SqlSolverSupport {
 
@@ -33,17 +34,20 @@ public class SqlSolverSupport {
     matcher = new BoundVarMatcher(liaVarName, outVar);
   }
 
-  public Liastar uexpToLiastar() {
+  public LiaStar uexpToLiastar() {
     Map<USum, String> sumVarMap = new HashMap<>();
     Set<USum> sums1 = new HashSet<>(), sums2 = new HashSet<>();
     UTerm q1Lia = replaceSummations(sumVarMap, sums1, query1);
     UTerm q2Lia = replaceSummations(sumVarMap, sums2, query2);
 
+    LiaStar result;
     if (sumVarMap.isEmpty()) { // no summation
-      return uexpWOSumToLiastar(q1Lia, q2Lia);
+      result = uexpWOSumToLiastar(q1Lia, q2Lia);
     } else {
-      return uexpWithSumToLiastar(q1Lia, q2Lia, sumVarMap, sums1, sums2);
+      result = uexpWithSumToLiastar(q1Lia, q2Lia, sumVarMap, sums1, sums2);
     }
+    // simplify the LIA* formula
+    return LiaStarSimplifier.getInstance().simplify(result);
   }
 
   HashSet<UVar> initFreeTuples() {
@@ -56,11 +60,11 @@ public class SqlSolverSupport {
     return result;
   }
 
-  Liastar uexpWithSumToLiastar(UTerm t1, UTerm t2, Map<USum, String> sumVarMap,
+  LiaStar uexpWithSumToLiastar(UTerm t1, UTerm t2, Map<USum, String> sumVarMap,
                                Set<USum> sumSet1, Set<USum> sumSet2) {
     HashMap<UTerm, String> termMap = new HashMap<>();
-    Liastar result = Liastar.mkNot(false,
-        Liastar.mkEq(false,
+    LiaStar result = LiaStar.mkNot(false,
+        LiaStar.mkEq(false,
             transUexpWithoutSum(false, t1, termMap, new HashSet<>()),
             transUexpWithoutSum(false, t2, termMap, new HashSet<>())
         )
@@ -81,7 +85,7 @@ public class SqlSolverSupport {
     Set<Integer> sumIndexSet2 = sumSet2.stream().map(sums::indexOf).collect(Collectors.toSet());
 
     HashSet<UVar> freeTuples = initFreeTuples();
-    result = Liastar.mkAnd(false, result,
+    result = LiaStar.mkAnd(false, result,
         sumsToLiaStar(false, true, sums, sumVars, sumIndexSet1, sumIndexSet2, termMap, freeTuples)
     );
     result.prepareInnervector(new HashSet<>(result.collectVarSet()));
@@ -89,31 +93,30 @@ public class SqlSolverSupport {
       System.out.println("Lia* before simplification: ");
       System.out.println(result);
     }
-    // simplify the LIA* formula
-    return LiaStarSimplifier.getInstance().simplify(result);
+    return result;
   }
 
-  private Liastar getOrRegisterLiaForUVar(UVar uVar, Map<UVar, String> uVarsToLiaVars) {
+  private LiaStar getOrRegisterLiaForUVar(UVar uVar, Map<UVar, String> uVarsToLiaVars) {
     assert uVar.isUnaryVar();
-    Liastar baseLia = null;
+    LiaStar baseLia = null;
     final UVar baseVar = UVar.getSingleBaseVar(uVar);
     for (UVar v : uVarsToLiaVars.keySet()) {
       if (baseVar.equals(v)) {
         final String varName = uVarsToLiaVars.get(v);
-        baseLia = Liastar.mkVar(false, varName);
+        baseLia = LiaStar.mkVar(false, varName);
         break;
       }
     }
     if (baseLia == null) {
       final String varName = newUliaVarName();
       uVarsToLiaVars.put(baseVar, varName);
-      baseLia = Liastar.mkVar(false, varName);
+      baseLia = LiaStar.mkVar(false, varName);
     }
     return uVar.is(UVar.VarKind.BASE) ?
-        baseLia : Liastar.mkFunc(false, uVar.name().toString(), baseLia);
+        baseLia : LiaStar.mkFunc(false, uVar.name().toString(), baseLia);
   }
 
-  Liastar transUexpNoSum(UTerm exp, Map<UVar, String> uVarsToLiaVars) {
+  LiaStar transUexpNoSum(UTerm exp, Map<UVar, String> uVarsToLiaVars) {
     switch (exp.kind()) {
       case SUMMATION -> {
         // should not have summation!"
@@ -121,7 +124,7 @@ public class SqlSolverSupport {
         return null;
       }
       case ADD -> {
-        Liastar result = null;
+        LiaStar result = null;
         final List<UTerm> subt = exp.subTerms();
 
         int constVal = 0;
@@ -136,28 +139,28 @@ public class SqlSolverSupport {
         if (i == subt.size()) return mkConst(false, constVal);
 
         for (UTerm t : subt) {
-          final Liastar curLia = transUexpNoSum(t, uVarsToLiaVars);
-          if (curLia instanceof LiaconstImpl) {
-            if ( ((LiaconstImpl)curLia).getValue() == 0 )
+          final LiaStar curLia = transUexpNoSum(t, uVarsToLiaVars);
+          if (curLia instanceof LiaConstImpl) {
+            if ( ((LiaConstImpl)curLia).getValue() == 0 )
               continue;
           }
           if (result == null) {
             result = curLia;
           } else {
-            if (result instanceof LiaiteImpl) result = ((LiaiteImpl) result).plusIte(curLia);
-            else if (curLia instanceof LiaiteImpl) result = ((LiaiteImpl) curLia).plusIte(result);
-            else result = Liastar.mkPlus(false, result, curLia);
+            if (result instanceof LiaIteImpl) result = ((LiaIteImpl) result).plusIte(curLia);
+            else if (curLia instanceof LiaIteImpl) result = ((LiaIteImpl) curLia).plusIte(result);
+            else result = LiaStar.mkPlus(false, result, curLia);
           }
         }
         return (result == null) ? mkConst(false, 0) : result;
       }
       case MULTIPLY -> {
-        Liastar result = null;
+        LiaStar result = null;
         final List<UTerm> subt = exp.subTerms();
         for (UTerm t : subt) {
-          final Liastar curLia = transUexpNoSum(t, uVarsToLiaVars);
-          if (curLia instanceof LiaconstImpl) {
-            long value = ((LiaconstImpl)curLia).getValue();
+          final LiaStar curLia = transUexpNoSum(t, uVarsToLiaVars);
+          if (curLia instanceof LiaConstImpl) {
+            long value = ((LiaConstImpl)curLia).getValue();
             if ( value == 0 )
               return mkConst(false, 0);
             if (value == 1)
@@ -165,32 +168,32 @@ public class SqlSolverSupport {
           }
           if (result == null) result = curLia;
           else {
-            if (result instanceof LiaiteImpl) result = ((LiaiteImpl) result).MultIte(curLia);
-            else if (curLia instanceof LiaiteImpl) result = ((LiaiteImpl) curLia).MultIte(result);
-            else result = Liastar.mkMult(false, result, curLia);
+            if (result instanceof LiaIteImpl) result = ((LiaIteImpl) result).MultIte(curLia);
+            else if (curLia instanceof LiaIteImpl) result = ((LiaIteImpl) curLia).MultIte(result);
+            else result = LiaStar.mkMult(false, result, curLia);
           }
         }
         return (result == null) ? mkConst(false, 1) : result;
       }
       case NEGATION -> {
         final UTerm body = ((UNeg) exp).body();
-        final Liastar cond = Liastar.mkEq(false, transUexpNoSum(body, uVarsToLiaVars), Liastar.mkConst(false, 0));
-        return Liastar.mkIte(false, cond, Liastar.mkConst(false, 1), Liastar.mkConst(false, 0));
+        final LiaStar cond = LiaStar.mkEq(false, transUexpNoSum(body, uVarsToLiaVars), LiaStar.mkConst(false, 0));
+        return LiaStar.mkIte(false, cond, LiaStar.mkConst(false, 1), LiaStar.mkConst(false, 0));
       }
       case SQUASH -> {
         final UTerm body = ((USquash) exp).body();
-        final Liastar cond = Liastar.mkEq(false, transUexpNoSum(body, uVarsToLiaVars), Liastar.mkConst(false, 0));
-        return Liastar.mkIte(false, cond, Liastar.mkConst(false, 0), Liastar.mkConst(false, 1));
+        final LiaStar cond = LiaStar.mkEq(false, transUexpNoSum(body, uVarsToLiaVars), LiaStar.mkConst(false, 0));
+        return LiaStar.mkIte(false, cond, LiaStar.mkConst(false, 0), LiaStar.mkConst(false, 1));
       }
       case CONST -> {
-        return Liastar.mkConst(false, ((UConst) exp).value());
+        return LiaStar.mkConst(false, ((UConst) exp).value());
       }
       case TABLE -> {
         final UTable table = (UTable) exp;
         final String tblName = table.tableName().toString();
         final UVar tblVar = table.var();
-        final Liastar lVar = getOrRegisterLiaForUVar(tblVar, uVarsToLiaVars);
-        return Liastar.mkFunc(false, tblName, lVar);
+        final LiaStar lVar = getOrRegisterLiaForUVar(tblVar, uVarsToLiaVars);
+        return LiaStar.mkFunc(false, tblName, lVar);
       }
       case PRED -> {
         final UPred pred = (UPred) exp;
@@ -200,20 +203,20 @@ public class SqlSolverSupport {
           assert pArgs.size() == 1;
           final UVar predVar = pArgs.get(0); // a(t)
           final String predName = pred.predName().toString();
-          final Liastar lVar = getOrRegisterLiaForUVar(predVar, uVarsToLiaVars);
-          final Liastar funcLia = Liastar.mkFunc(false, predName, lVar);
-          return Liastar.mkIte(false,
-              Liastar.mkEq(false, funcLia, Liastar.mkConst(false, 0)),
-              Liastar.mkConst(false, 0),
-              Liastar.mkConst(false, 1));
+          final LiaStar lVar = getOrRegisterLiaForUVar(predVar, uVarsToLiaVars);
+          final LiaStar funcLia = LiaStar.mkFunc(false, predName, lVar);
+          return LiaStar.mkIte(false,
+              LiaStar.mkEq(false, funcLia, LiaStar.mkConst(false, 0)),
+              LiaStar.mkConst(false, 0),
+              LiaStar.mkConst(false, 1));
         } else if (pred.isBinaryPred()) {
           // Case 2. [U-expr0 <binary op> U-expr1]
-          final Liastar liaVar0 = transUexpNoSum(pred.args().get(0), uVarsToLiaVars);
-          final Liastar liaVar1 = transUexpNoSum(pred.args().get(1), uVarsToLiaVars);
+          final LiaStar liaVar0 = transUexpNoSum(pred.args().get(0), uVarsToLiaVars);
+          final LiaStar liaVar1 = transUexpNoSum(pred.args().get(1), uVarsToLiaVars);
 
-          if (liaVar0 instanceof LiaconstImpl && liaVar1 instanceof LiaconstImpl) {
-            long value0 = ((LiaconstImpl)liaVar0).getValue();
-            long value1 = ((LiaconstImpl)liaVar1).getValue();
+          if (liaVar0 instanceof LiaConstImpl && liaVar1 instanceof LiaConstImpl) {
+            long value0 = ((LiaConstImpl)liaVar0).getValue();
+            long value1 = ((LiaConstImpl)liaVar1).getValue();
             boolean b = switch (pred.predKind()) {
               case EQ -> value0 == value1;
               case NEQ -> value0 != value1;
@@ -226,18 +229,18 @@ public class SqlSolverSupport {
             return b ? mkConst(false, 1) : mkConst(false, 0);
           }
 
-          final Liastar target = switch (pred.predKind()) {
-            case EQ -> Liastar.mkEq(false, liaVar0, liaVar1);
-            case NEQ -> Liastar.mkNot(false, Liastar.mkEq(false, liaVar0, liaVar1));
-            case LE -> Liastar.mkLe(false, liaVar0, liaVar1);
-            case LT -> Liastar.mkLt(false, liaVar0, liaVar1);
-            case GE -> Liastar.mkLe(false, liaVar1, liaVar0);
-            case GT -> Liastar.mkLt(false, liaVar1, liaVar0);
+          final LiaStar target = switch (pred.predKind()) {
+            case EQ -> LiaStar.mkEq(false, liaVar0, liaVar1);
+            case NEQ -> LiaStar.mkNot(false, LiaStar.mkEq(false, liaVar0, liaVar1));
+            case LE -> LiaStar.mkLe(false, liaVar0, liaVar1);
+            case LT -> LiaStar.mkLt(false, liaVar0, liaVar1);
+            case GE -> LiaStar.mkLe(false, liaVar1, liaVar0);
+            case GT -> LiaStar.mkLt(false, liaVar1, liaVar0);
             default -> throw new IllegalArgumentException("unsupported predicate in Uexpr.");
           };
-          return Liastar.mkIte(false, target,
-              Liastar.mkConst(false, 1),
-              Liastar.mkConst(false, 0));
+          return LiaStar.mkIte(false, target,
+              LiaStar.mkConst(false, 1),
+              LiaStar.mkConst(false, 0));
         } else {
           throw new UnsupportedOperationException("unsupported UPred var type.");
         }
@@ -246,20 +249,20 @@ public class SqlSolverSupport {
         return getOrRegisterLiaForUVar(((UVarTerm) exp).var(), uVarsToLiaVars);
       }
       case STRING -> {
-        return Liastar.mkString(false, ((UString) exp).value());
+        return LiaStar.mkString(false, ((UString) exp).value());
       }
       case FUNC -> {
         UFunc func = (UFunc) exp;
         String funcName = func.funcName().toString();
         // in_list_N
         if (PredefinedFunctions.belongsToFamily(func, PredefinedFunctions.NAME_IN_LIST)) {
-          List<Liastar> liaOps = new ArrayList<>();
+          List<LiaStar> liaOps = new ArrayList<>();
           List<UTerm> args = exp.subTerms();
           for (UTerm arg : args) {
-            Liastar liaOp = transUexpNoSum(arg, uVarsToLiaVars);
+            LiaStar liaOp = transUexpNoSum(arg, uVarsToLiaVars);
             liaOps.add(liaOp);
           }
-          return Liastar.mkFunc(false, funcName, liaOps);
+          return LiaStar.mkFunc(false, funcName, liaOps);
         }
         // other functions
         switch (funcName) {
@@ -267,9 +270,9 @@ public class SqlSolverSupport {
             assert exp.subTerms().size() == 2;
             UTerm op0 = exp.subTerms().get(0);
             UTerm op1 = exp.subTerms().get(1);
-            Liastar liaOp0 = transUexpNoSum(op0, uVarsToLiaVars);
-            Liastar liaOp1 = transUexpNoSum(op1, uVarsToLiaVars);
-            return Liastar.mkFunc(false, PredefinedFunctions.NAME_LIKE, List.of(liaOp0, liaOp1));
+            LiaStar liaOp0 = transUexpNoSum(op0, uVarsToLiaVars);
+            LiaStar liaOp1 = transUexpNoSum(op1, uVarsToLiaVars);
+            return LiaStar.mkFunc(false, PredefinedFunctions.NAME_LIKE, List.of(liaOp0, liaOp1));
           }
           default: {
             throw new UnsupportedOperationException("unsupported function: " + funcName);
@@ -282,9 +285,9 @@ public class SqlSolverSupport {
     }
   }
 
-  Liastar uexpWOSumToLiastar(UTerm t1, UTerm t2) {
+  LiaStar uexpWOSumToLiastar(UTerm t1, UTerm t2) {
     final Map<UVar, String> varMap = new HashMap<>();
-    return Liastar.mkNot(false, Liastar.mkEq(false, transUexpNoSum(t1, varMap), transUexpNoSum(t2, varMap)));
+    return LiaStar.mkNot(false, LiaStar.mkEq(false, transUexpNoSum(t1, varMap), transUexpNoSum(t2, varMap)));
   }
 
   String newUliaVarName() {
@@ -812,7 +815,7 @@ public class SqlSolverSupport {
     return UAdd.mk(terms);
   }
 
-  Liastar sumsToLiaStar(
+  LiaStar sumsToLiaStar(
       boolean isInner,
       boolean instWithTuple,
       ArrayList<UTerm> sumList,
@@ -842,30 +845,30 @@ public class SqlSolverSupport {
     Set<Integer> subSumIndexSet1 = new HashSet<>();
     Set<Integer> subSumIndexSet2 = new HashSet<>();
     replaceSumsInList(newSumList, sumIndexSet1, sumIndexSet2, subSums, subVars, subSumIndexSet1, subSumIndexSet2);
-    Liastar constraints = null;
+    LiaStar constraints = null;
     ArrayList<String> innerVector = new ArrayList<>();
     HashSet<UVarTerm> isNullTuples = new HashSet<>();
-    Set<LiavarImpl> stringVars = new HashSet<>();
+    Set<LiaVarImpl> stringVars = new HashSet<>();
     // equations
     for (int i = 0; i < sumVarList.size(); ++i) {
       String innerVarName = newUliaVarName();
       innerVector.add(innerVarName);
-      Liastar equation = transUexpWithoutSum(true, newSumList.get(i), termVarMap, isNullTuples, stringVars);
+      LiaStar equation = transUexpWithoutSum(true, newSumList.get(i), termVarMap, isNullTuples, stringVars);
       if (ifInstWithTuple) {
-        equation = Liastar.mkEq(true, Liastar.mkVar(true, sumVarList.get(i)), equation);
+        equation = LiaStar.mkEq(true, LiaStar.mkVar(true, sumVarList.get(i)), equation);
       } else {
-        equation = Liastar.mkEq(true, Liastar.mkVar(true, innerVarName), equation);
+        equation = LiaStar.mkEq(true, LiaStar.mkVar(true, innerVarName), equation);
       }
       if (constraints == null) {
         constraints = equation;
       } else {
-        constraints = Liastar.mkAnd(true, constraints, equation);
+        constraints = LiaStar.mkAnd(true, constraints, equation);
       }
     }
     // IsNull constraints
-    Liastar isNullConstraints = isNullCongruence(termVarMap, isNullTuples);
+    LiaStar isNullConstraints = isNullCongruence(termVarMap, isNullTuples);
     if (isNullConstraints != null)
-      constraints = Liastar.mkAnd(true, constraints, isNullConstraints);
+      constraints = LiaStar.mkAnd(true, constraints, isNullConstraints);
     if (!subSums.isEmpty()) {
       if (!ifInstWithTuple) {
         freeTuples.add(commonTuple);
@@ -875,26 +878,26 @@ public class SqlSolverSupport {
       );
     }
     // string var constraints
-    Liastar stringVarConstraints = null;
-    Set<LiavarImpl> usedStringVars = new HashSet<>();
-    for (LiavarImpl v1 : stringVars) {
+    LiaStar stringVarConstraints = null;
+    Set<LiaVarImpl> usedStringVars = new HashSet<>();
+    for (LiaVarImpl v1 : stringVars) {
       usedStringVars.add(v1);
-      for (LiavarImpl v2 : stringVars) {
+      for (LiaVarImpl v2 : stringVars) {
         if (!usedStringVars.contains(v2)) {
-          Liastar neq = Liastar.mkNot(true, Liastar.mkEq(true, v1, v2));
+          LiaStar neq = LiaStar.mkNot(true, LiaStar.mkEq(true, v1, v2));
           if (stringVarConstraints == null)
             stringVarConstraints = neq;
           else
-            stringVarConstraints = Liastar.mkAnd(true, stringVarConstraints, neq);
+            stringVarConstraints = LiaStar.mkAnd(true, stringVarConstraints, neq);
         }
       }
     }
-    constraints = Liastar.mkAnd(true, constraints, stringVarConstraints);
+    constraints = LiaStar.mkAnd(true, constraints, stringVarConstraints);
 
     if (ifInstWithTuple) {
       return constraints;
     } else {
-      LiasumImpl result = (LiasumImpl) mkSum(isInner, sumVarList, innerVector, constraints);
+      LiaSumImpl result = (LiaSumImpl) mkSum(isInner, sumVarList, innerVector, constraints);
       // result.updateInnerVector();
       return result;
     }
@@ -907,7 +910,7 @@ public class SqlSolverSupport {
     return pred.isPredKind(UPred.PredKind.FUNC) && pred.predName().equals(NAME_IS_NULL);
   }
 
-  private static Liastar isNullCongruence(HashMap<UTerm, String> termVarMap, HashSet<UVarTerm> isNullTuples) {
+  private static LiaStar isNullCongruence(HashMap<UTerm, String> termVarMap, HashSet<UVarTerm> isNullTuples) {
     if (isNullTuples.isEmpty() || termVarMap.isEmpty()) return null;
     HashSet<UTerm> isNullUTerms = new HashSet<>(termVarMap.keySet().stream().filter(t -> isNullUTerm(t)).toList());
     HashSet<UVarTerm> existingIsNullTuples = new HashSet<>();
@@ -918,31 +921,31 @@ public class SqlSolverSupport {
       if (!isNullTuples.contains(isNullTuple))
         existingIsNullTuples.add(isNullTuple);
     }
-    Liastar result = null;
+    LiaStar result = null;
     for (UVarTerm v1 : isNullTuples) {
       String var1 = termVarMap.get(v1);
       assert var1 != null;
       ArrayList<UTerm> isNullarg1 = new ArrayList<>();
       isNullarg1.add(v1);
       String isNullVar1 = termVarMap.get(UPred.mk(UPred.PredKind.FUNC, NAME_IS_NULL, isNullarg1));
-      LiavarImpl liavar1 = (LiavarImpl) Liastar.mkVar(true, var1);
-      LiavarImpl liaIsNullvar1 = (LiavarImpl) Liastar.mkVar(true, isNullVar1);
+      LiaVarImpl liavar1 = (LiaVarImpl) LiaStar.mkVar(true, var1);
+      LiaVarImpl liaIsNullvar1 = (LiaVarImpl) LiaStar.mkVar(true, isNullVar1);
       for (UVarTerm v2 : existingIsNullTuples) {
         String var2 = termVarMap.get(v2);
         assert var2 != null;
         ArrayList<UTerm> isNullarg2 = new ArrayList<>();
         isNullarg2.add(v2);
         String isNullVar2 = termVarMap.get(UPred.mk(UPred.PredKind.FUNC, NAME_IS_NULL, isNullarg2));
-        LiavarImpl liavar2 = (LiavarImpl) Liastar.mkVar(true, var2);
-        LiavarImpl liaIsNullvar2 = (LiavarImpl) Liastar.mkVar(true, isNullVar2);
-        Liastar tmp = Liastar.mkEq(true,
+        LiaVarImpl liavar2 = (LiaVarImpl) LiaStar.mkVar(true, var2);
+        LiaVarImpl liaIsNullvar2 = (LiaVarImpl) LiaStar.mkVar(true, isNullVar2);
+        LiaStar tmp = LiaStar.mkEq(true,
             liaIsNullvar1,
-            Liastar.mkIte(true, Liastar.mkEq(true, liavar1, liavar2), liaIsNullvar2, liaIsNullvar1)
+            LiaStar.mkIte(true, LiaStar.mkEq(true, liavar1, liavar2), liaIsNullvar2, liaIsNullvar1)
           );
 //        Liastar tmp = Liastar.mkOr(true,
 //            Liastar.mkNot(true, ),
 //            Liastar.mkEq(true, liaIsNullvar1, liaIsNullvar2));
-        result = (result == null) ? tmp : Liastar.mkAnd(true, result, tmp) ;
+        result = (result == null) ? tmp : LiaStar.mkAnd(true, result, tmp) ;
       }
     }
     return result;
@@ -1463,7 +1466,7 @@ public class SqlSolverSupport {
     return prevEnumRelations;
   }
 
-  Liastar transUexpWithoutSum(boolean innerStar,
+  LiaStar transUexpWithoutSum(boolean innerStar,
                               UTerm exp,
                               Map<UTerm, String> uTermToLiaVar,
                               HashSet<UVarTerm> isnullTuples) {
@@ -1473,49 +1476,49 @@ public class SqlSolverSupport {
   // summations in exp have been replaced by new variables
   // Then transUexpWithoutSum translates exp into LIA formula
   // uTermToLiaVar is used to replace the same terms with same variables
-  Liastar transUexpWithoutSum(boolean innerStar,
+  LiaStar transUexpWithoutSum(boolean innerStar,
                               UTerm exp,
                               Map<UTerm, String> uTermToLiaVar,
                               HashSet<UVarTerm> isnullTuples,
-                              Set<LiavarImpl> stringVars) {
+                              Set<LiaVarImpl> stringVars) {
     switch (exp.kind()) {
       case SUMMATION -> throw new UnsupportedOperationException("should not have summation when transforming to Lia!");
       case ADD -> {
-        Liastar result = null;
+        LiaStar result = null;
         final List<UTerm> subTerms = exp.subTerms();
         for (UTerm t : subTerms) {
-          Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples, stringVars);
+          LiaStar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples, stringVars);
           curLia = curLia.simplifyIte();
           if (result == null) {
             result = curLia;
-          } else if (result instanceof LiaiteImpl) {
-            result = ((LiaiteImpl)result).plusIte(curLia);
-          } else if (curLia instanceof LiaiteImpl) {
-            result = ((LiaiteImpl)curLia).plusIte(result);
+          } else if (result instanceof LiaIteImpl) {
+            result = ((LiaIteImpl)result).plusIte(curLia);
+          } else if (curLia instanceof LiaIteImpl) {
+            result = ((LiaIteImpl)curLia).plusIte(result);
           } else {
-            result = Liastar.mkPlus(innerStar, result, curLia);
+            result = LiaStar.mkPlus(innerStar, result, curLia);
           }
         }
         return result;
       }
       case MULTIPLY -> {
-        Liastar result = null;
+        LiaStar result = null;
         final List<UTerm> subTerms = exp.subTerms();
-        Liastar iteNonzeroCond = null;
+        LiaStar iteNonzeroCond = null;
         for (UTerm t : subTerms) {
-          Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples, stringVars);
-          Liastar[] condOpArray = new Liastar[2];
+          LiaStar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples, stringVars);
+          LiaStar[] condOpArray = new LiaStar[2];
           boolean hasZeroIte = ishasZeroIte(innerStar, curLia, condOpArray);
           if (hasZeroIte) {
-            Liastar cond = condOpArray[0];
-            Liastar op = condOpArray[1];
+            LiaStar cond = condOpArray[0];
+            LiaStar op = condOpArray[1];
             iteNonzeroCond = (iteNonzeroCond == null) ? cond : mkAnd(innerStar, iteNonzeroCond, cond);
           } else {
             if (result == null) result = curLia;
             else {
-              if (result instanceof LiaiteImpl) result = ((LiaiteImpl) result).MultIte(curLia);
-              else if (curLia instanceof LiaiteImpl) result = ((LiaiteImpl) curLia).MultIte(result);
-              else result = Liastar.mkMult(innerStar, result, curLia);
+              if (result instanceof LiaIteImpl) result = ((LiaIteImpl) result).MultIte(curLia);
+              else if (curLia instanceof LiaIteImpl) result = ((LiaIteImpl) curLia).MultIte(result);
+              else result = LiaStar.mkMult(innerStar, result, curLia);
             }
           }
         }
@@ -1529,25 +1532,25 @@ public class SqlSolverSupport {
       }
       case NEGATION, SQUASH -> {
         final UTerm body = ((UUnary) exp).body();
-        final Liastar cond =
-            Liastar.mkEq(
+        final LiaStar cond =
+            LiaStar.mkEq(
                 innerStar,
                 transUexpWithoutSum(innerStar, body, uTermToLiaVar, isnullTuples, stringVars),
-                Liastar.mkConst(innerStar, 0));
+                LiaStar.mkConst(innerStar, 0));
         return exp.kind() == NEGATION
-            ? Liastar.mkIte(innerStar, cond, Liastar.mkConst(innerStar, 1), Liastar.mkConst(innerStar, 0))
-            : Liastar.mkIte(innerStar, cond, Liastar.mkConst(innerStar, 0), Liastar.mkConst(innerStar, 1));
+            ? LiaStar.mkIte(innerStar, cond, LiaStar.mkConst(innerStar, 1), LiaStar.mkConst(innerStar, 0))
+            : LiaStar.mkIte(innerStar, cond, LiaStar.mkConst(innerStar, 0), LiaStar.mkConst(innerStar, 1));
       }
       case CONST -> {
-        return Liastar.mkConst(false, ((UConst) exp).value());
+        return LiaStar.mkConst(false, ((UConst) exp).value());
       }
       case TABLE -> {
         final String varName = uTermToLiaVar.computeIfAbsent((UTable) exp, t -> newUliaVarName());
-        return Liastar.mkVar(innerStar, varName);
+        return LiaStar.mkVar(innerStar, varName);
       }
       case PRED -> {
         // Case 1. ULiaVar
-        if (exp instanceof ULiaVar) return Liastar.mkVar(innerStar, exp.toString());
+        if (exp instanceof ULiaVar) return LiaStar.mkVar(innerStar, exp.toString());
         final UPred pred = (UPred) exp;
         if (pred.isPredKind(UPred.PredKind.FUNC) && isPredOfVarArg(pred)) {
           // Case 2. [p(a(t))]. View `p(a(t))` as a variable
@@ -1555,112 +1558,73 @@ public class SqlSolverSupport {
           assert pArgs.size() == 1;
           uTermToLiaVar.computeIfAbsent(UVarTerm.mk(pArgs.get(0)), v -> newUliaVarName());
           final String varName = uTermToLiaVar.computeIfAbsent(pred, v -> newUliaVarName());
-          final Liastar liaVar = Liastar.mkVar(innerStar, varName);
+          final LiaStar liaVar = LiaStar.mkVar(innerStar, varName);
           if (pred.predName().equals(NAME_IS_NULL))
             isnullTuples.add(UVarTerm.mk(pArgs.get(0)));
-          return Liastar.mkIte(
+          return LiaStar.mkIte(
               innerStar,
-              Liastar.mkEq(innerStar, liaVar, Liastar.mkConst(innerStar, 0)),
-              Liastar.mkConst(innerStar, 0),
-              Liastar.mkConst(innerStar, 1));
+              LiaStar.mkEq(innerStar, liaVar, LiaStar.mkConst(innerStar, 0)),
+              LiaStar.mkConst(innerStar, 0),
+              LiaStar.mkConst(innerStar, 1));
         } else if (pred.isBinaryPred()) {
           // Case 3. [U-expr0 <binary op> U-expr1]
-          final Liastar liaVar0 = transUexpWithoutSum(innerStar, pred.args().get(0), uTermToLiaVar, isnullTuples, stringVars);
-          final Liastar liaVar1 = transUexpWithoutSum(innerStar, pred.args().get(1), uTermToLiaVar, isnullTuples, stringVars);
-          final Liastar target = switch (pred.predKind()) {
-            case EQ -> Liastar.mkEq(innerStar, liaVar0, liaVar1);
-            case NEQ -> Liastar.mkNot(innerStar, Liastar.mkEq(innerStar, liaVar0, liaVar1));
-            case LE -> Liastar.mkLe(innerStar, liaVar0, liaVar1);
-            case LT -> Liastar.mkLt(innerStar, liaVar0, liaVar1);
-            case GE -> Liastar.mkLe(innerStar, liaVar1, liaVar0);
-            case GT -> Liastar.mkLt(innerStar, liaVar1, liaVar0);
+          final LiaStar liaVar0 = transUexpWithoutSum(innerStar, pred.args().get(0), uTermToLiaVar, isnullTuples, stringVars);
+          final LiaStar liaVar1 = transUexpWithoutSum(innerStar, pred.args().get(1), uTermToLiaVar, isnullTuples, stringVars);
+          final LiaStar target = switch (pred.predKind()) {
+            case EQ -> LiaStar.mkEq(innerStar, liaVar0, liaVar1);
+            case NEQ -> LiaStar.mkNot(innerStar, LiaStar.mkEq(innerStar, liaVar0, liaVar1));
+            case LE -> LiaStar.mkLe(innerStar, liaVar0, liaVar1);
+            case LT -> LiaStar.mkLt(innerStar, liaVar0, liaVar1);
+            case GE -> LiaStar.mkLe(innerStar, liaVar1, liaVar0);
+            case GT -> LiaStar.mkLt(innerStar, liaVar1, liaVar0);
             default -> throw new IllegalArgumentException("unsupported predicate in Uexpr.");
           };
-          return Liastar.mkIte(innerStar, target, Liastar.mkConst(innerStar, 1), Liastar.mkConst(innerStar, 0));
+          return LiaStar.mkIte(innerStar, target, LiaStar.mkConst(innerStar, 1), LiaStar.mkConst(innerStar, 0));
         } else {
           throw new UnsupportedOperationException("unsupported UPred var type.");
         }
       }
       case VAR, STRING -> {
         final String varName = uTermToLiaVar.computeIfAbsent(exp, v -> newUliaVarName());
-        LiavarImpl var = (LiavarImpl) Liastar.mkVar(innerStar, varName);
+        LiaVarImpl var = (LiaVarImpl) LiaStar.mkVar(innerStar, varName);
         if (exp instanceof UString && stringVars != null) stringVars.add(var);
         return var;
       }
       case FUNC -> {
-        UFunc func = (UFunc) exp;
-        String funcName = func.funcName().toString();
-        // in_list_N
-        if (PredefinedFunctions.belongsToFamily(func, PredefinedFunctions.NAME_IN_LIST)) {
-          List<Liastar> liaOps = new ArrayList<>();
-          List<UTerm> args = exp.subTerms();
-          for (UTerm arg : args) {
-            Liastar liaOp = transUexpWithoutSum(innerStar, arg, uTermToLiaVar, isnullTuples, stringVars);
-            liaOps.add(liaOp);
-          }
-          return Liastar.mkFunc(innerStar, funcName, liaOps);
-        }
-        // other functions
-        switch (funcName) {
-          case "divide": {
-            Liastar result = null;
-            final List<UTerm> subTerms = exp.subTerms();
-            for (UTerm t : subTerms) {
-              Liastar curLia = transUexpWithoutSum(innerStar, t, uTermToLiaVar, isnullTuples, stringVars);
-              if (result == null) {
-                result = curLia;
-              } else {
-                result = Liastar.mkDiv(innerStar, result, curLia);
-              }
-            }
-            return result;
-          }
-          case "sqrt": {
-            assert exp.subTerms().size() == 1;
-            UTerm operand = exp.subTerms().get(0);
-            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples, stringVars);
-            return Liastar.mkFunc(innerStar, "sqrt", liaOp);
-          }
-          case "minus": {
-            assert exp.subTerms().size() == 2;
-            UTerm op0 = exp.subTerms().get(0);
-            UTerm op1 = exp.subTerms().get(1);
-            Liastar liaOp0 = transUexpWithoutSum(innerStar, op0, uTermToLiaVar, isnullTuples, stringVars);
-            Liastar liaOp1 = transUexpWithoutSum(innerStar, op1, uTermToLiaVar, isnullTuples, stringVars);
-            return Liastar.mkFunc(innerStar, "minus", List.of(liaOp0, liaOp1));
-          }
-          case "`upper`", "upper": {
-            assert exp.subTerms().size() == 1;
-            UTerm operand = exp.subTerms().get(0);
-            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples, stringVars);
-            return Liastar.mkFunc(innerStar, "upper", liaOp);
-          }
-          case "`lower`", "lower": {
-            assert exp.subTerms().size() == 1;
-            UTerm operand = exp.subTerms().get(0);
-            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples, stringVars);
-            return Liastar.mkFunc(innerStar, "lower", liaOp);
-          }
-          case "`year`", "year": {
-            assert exp.subTerms().size() == 1;
-            UTerm operand = exp.subTerms().get(0);
-            Liastar liaOp = transUexpWithoutSum(innerStar, operand, uTermToLiaVar, isnullTuples, stringVars);
-            return Liastar.mkFunc(innerStar, "year", liaOp);
-          }
-          case PredefinedFunctions.NAME_LIKE: {
-            assert exp.subTerms().size() == 2;
-            UTerm op0 = exp.subTerms().get(0);
-            UTerm op1 = exp.subTerms().get(1);
-            Liastar liaOp0 = transUexpWithoutSum(innerStar, op0, uTermToLiaVar, isnullTuples, stringVars);
-            Liastar liaOp1 = transUexpWithoutSum(innerStar, op1, uTermToLiaVar, isnullTuples, stringVars);
-            return Liastar.mkFunc(innerStar, PredefinedFunctions.NAME_LIKE, List.of(liaOp0, liaOp1));
-          }
-          default: {
-            throw new UnsupportedOperationException("unsupported function: " + funcName);
-          }
-        }
+        return transFuncNoSum(innerStar, (UFunc) exp, uTermToLiaVar, isnullTuples, stringVars);
       }
       default -> throw new UnsupportedOperationException("unsupported UTerm type.");
     }
   }
+
+  private LiaStar transFuncNoSum(
+          boolean innerStar,
+          UFunc func,
+          Map<UTerm, String> uTermToLiaVar,
+          HashSet<UVarTerm> isnullTuples,
+          Set<LiaVarImpl> stringVars) {
+    // translate the function case by case
+    final String funcName = func.funcName().toString();
+    final int arity = func.args().size();
+    // non-negative integral functions can be replaced with a var
+    if (returnsNonNegativeInt(funcName, arity)) {
+      final String varName = uTermToLiaVar.computeIfAbsent(func, t -> newUliaVarName());
+      return LiaStar.mkVar(innerStar, varName);
+    }
+    // other functions are translated into different LIA terms
+    // first translate function arguments
+    final List<LiaStar> liaOps = new ArrayList<>();
+    final List<UTerm> args = func.args();
+    for (UTerm arg : args) {
+      LiaStar liaOp = transUexpWithoutSum(innerStar, arg, uTermToLiaVar, isnullTuples, stringVars);
+      liaOps.add(liaOp);
+    }
+    // then translate the function
+    if (DIVIDE.contains(funcName, arity)) {
+      // division has a dedicated LIA expression type
+      return LiaStar.mkDiv(innerStar, liaOps.get(0), liaOps.get(1));
+    }
+    return LiaStar.mkFunc(innerStar, funcName, liaOps);
+  }
+
 }
